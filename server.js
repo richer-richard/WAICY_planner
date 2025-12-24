@@ -15,10 +15,21 @@ const JWT_SECRET = process.env.JWT_SECRET || "change-this-secret-in-production";
 const USERS_FILE = path.join(__dirname, "users.json");
 const USER_DATA_DIR = path.join(__dirname, "user_data");
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+function normalizeApiKey(key) {
+  if (!key) return "";
+  return String(key).trim().replace(/^Bearer\\s+/i, "");
+}
+
+function maskApiKey(key) {
+  if (!key) return "";
+  if (key.length <= 8) return "********";
+  return `${key.slice(0, 3)}…${key.slice(-4)}`;
+}
+
+const DEEPSEEK_API_KEY = normalizeApiKey(process.env.DEEPSEEK_API_KEY);
 const DEEPSEEK_BASE_URL =
-  process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1/chat/completions";
-const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+  (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1/chat/completions").trim();
+const DEEPSEEK_MODEL = (process.env.DEEPSEEK_MODEL || "deepseek-chat").trim();
 
 if (!DEEPSEEK_API_KEY || DEEPSEEK_API_KEY === "your_deepseek_api_key_here") {
   console.warn(
@@ -31,7 +42,7 @@ if (!DEEPSEEK_API_KEY || DEEPSEEK_API_KEY === "your_deepseek_api_key_here") {
     "   Get your API key from: https://platform.deepseek.com/",
   );
   console.warn(
-    "   DEEPSEEK_API_KEY: ", DEEPSEEK_API_KEY,
+    "   DEEPSEEK_API_KEY: ", maskApiKey(DEEPSEEK_API_KEY),
   );
 }
 
@@ -314,6 +325,64 @@ app.post("/api/user/data", authenticateToken, async (req, res) => {
 
 // ---------- AI Planning Endpoints (DeepSeek-powered) ----------
 
+app.post("/api/ai/task-priority", async (req, res) => {
+  try {
+    const {
+      description = "",
+      category = "",
+      deadlineDate = "",
+      deadlineTime = "",
+      durationHours = null,
+      urgentHint = "",
+      importantHint = "",
+    } = req.body || {};
+
+    if (!description || typeof description !== "string") {
+      return res.status(400).json({ error: "Missing 'description' in request body." });
+    }
+
+    const normalizedUrgentHint = String(urgentHint || "").trim().toLowerCase();
+    const normalizedImportantHint = String(importantHint || "").trim().toLowerCase();
+
+    const userPrompt = `
+Decide the Eisenhower priority for this task.
+Return JSON only: {"task_priority":"Urgent & Important"|"Urgent, Not Important"|"Important, Not Urgent"|"Not Urgent & Not Important","reason":"short"}.
+- Use the user's urgent/important hints as signals, but you may override if the deadline/duration strongly suggests otherwise.
+Task description: ${description}
+Category: ${category || "unknown"}
+Deadline: ${deadlineDate || "unknown"} ${deadlineTime || ""}
+Estimated duration (hours): ${durationHours ?? "unknown"}
+User says urgent: ${normalizedUrgentHint || "unknown"}
+User says important: ${normalizedImportantHint || "unknown"}
+`.trim();
+
+    const reply = await callDeepSeek({
+      system: "You are an AI planner. Return strict JSON only.",
+      user: userPrompt,
+      temperature: 0.2,
+      maxTokens: 180,
+      expectJSON: true,
+    });
+
+    const parsed = safeParseJSON(reply) || {};
+    const allowed = new Set([
+      "Urgent & Important",
+      "Urgent, Not Important",
+      "Important, Not Urgent",
+      "Not Urgent & Not Important",
+    ]);
+
+    if (!allowed.has(parsed.task_priority)) {
+      return res.status(502).json({ error: "AI returned an invalid task_priority." });
+    }
+
+    res.json({ task_priority: parsed.task_priority, reason: parsed.reason || "" });
+  } catch (err) {
+    console.error("task-priority error:", err);
+    res.status(500).json({ error: err.message || "Task priority failed" });
+  }
+});
+
 app.post("/api/ai/prioritize-tasks", authenticateToken, async (req, res) => {
   try {
     const { tasks = [], profile = {}, timeBudgetHours = 6 } = req.body || {};
@@ -481,10 +550,6 @@ app.use(express.static(path.join(__dirname)));
 
 app.post("/api/chat", async (req, res) => {
   try {
-    if (!DEEPSEEK_API_KEY) {
-      return res.status(500).json({ error: "DEEPSEEK_API_KEY is not configured on the server." });
-    }
-
     const { message, context } = req.body || {};
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "Missing 'message' in request body." });
@@ -500,57 +565,20 @@ app.post("/api/chat", async (req, res) => {
       userContent = `Context:\n${context}\n\nUser question:\n${message}`;
     }
 
-    const payload = {
-      model: "deepseek-chat", // Common model names: "deepseek-chat", "deepseek-reasoner", "deepseek-coder"
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
+    const reply = await callDeepSeek({
+      system: systemPrompt,
+      user: userContent,
       temperature: 0.7,
-      max_tokens: 512,
-    };
-
-    const response = await fetch(DEEPSEEK_BASE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify(payload),
+      maxTokens: 512,
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("DeepSeek API error:", response.status, text);
-      let errorMessage = "Upstream DeepSeek API error.";
-      try {
-        const errorData = JSON.parse(text);
-        if (errorData.error?.message) {
-          errorMessage = errorData.error.message;
-        }
-      } catch (e) {
-        // Use default error message if parsing fails
-      }
-      return res.status(502).json({ 
-        error: errorMessage,
-        details: `Status: ${response.status}. Check your API key and model name.`
-      });
-    }
-
-    const data = await response.json();
-    const reply =
-      data.choices?.[0]?.message?.content?.trim() ||
-      "I had trouble generating a detailed answer, but I’m here to help you prioritize and time-block your work.";
 
     res.json({ reply });
   } catch (err) {
     console.error("Error in /api/chat:", err);
-    res.status(500).json({ error: "Internal server error." });
+    res.status(502).json({ error: err.message || "Upstream AI error." });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Axis server running at http://localhost:${PORT}`);
 });
-
-

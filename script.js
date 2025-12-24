@@ -448,9 +448,11 @@ function startPomodoroTimer() {
           oscillator.start(audioContext.currentTime);
           oscillator.stop(audioContext.currentTime + 0.5);
         } catch (e) {
-          // Fallback: browser notification
-          if (Notification.permission === 'granted') {
-            new Notification('Pomodoro Timer', { body: 'Time\'s up! Great work! 🎉' });
+          // Fallback: in-app toast or browser notification (if already granted)
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("Pomodoro Timer", { body: "Time's up! Great work! 🎉" });
+          } else {
+            showToast("Time's up! Great work!");
           }
         }
       }
@@ -519,11 +521,6 @@ function initPomodoroTimer() {
       }
     };
   }
-  
-  // Request notification permission
-  if ("Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
-  }
 }
 
 // ---------- Authentication UI ----------
@@ -590,13 +587,11 @@ async function handleLogin(email, password) {
     // Logins should not trigger onboarding wizard
     onboardingMode = null;
     shouldShowOnboarding = false;
+    localStorage.removeItem("planwise_should_show_onboarding");
+    localStorage.removeItem("planwise_onboarding_mode");
 
-    await loadUserData();
-    showView('dashboard');
-    // Initialize all dashboard features
-    initDashboard();
-    // Start periodic reflection checker
-    startReflectionChecker();
+    // Go to dedicated dashboard page
+    window.location.href = "dashboard.html";
     return true;
   } catch (err) {
     console.error("Login error:", err);
@@ -641,22 +636,14 @@ async function handleSignup(name, email, password) {
     currentUser = data.user;
     localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(data.user));
     
-    // New signups should see personalization only (no tasks/confirm steps)
+    // New signups should see personalization-only onboarding on the dashboard page.
     onboardingMode = "personalization-only";
     shouldShowOnboarding = true;
-    applyOnboardingModeUI();
+    localStorage.setItem("planwise_should_show_onboarding", "1");
+    localStorage.setItem("planwise_onboarding_mode", onboardingMode);
 
-    await loadUserData();
-    showView('dashboard');
-    // Initialize all dashboard features
-    initDashboard();
-    // Show personalization-only onboarding for new users (only during signup)
-    if (shouldShowOnboarding && !state.profile) {
-      setStep(1);
-      initOnboardingGoals();
-    } else {
-      startReflectionChecker();
-    }
+    // Go to dedicated dashboard page
+    window.location.href = "dashboard.html";
     return true;
   } catch (err) {
     console.error("Signup error:", err);
@@ -710,13 +697,14 @@ function handleContinueWithoutLogin() {
   // Don't trigger onboarding wizard for guest mode - just go to dashboard
   onboardingMode = null;
   shouldShowOnboarding = false;
-  
-  showView('dashboard');
-  initDashboard();
-  
-  // Show a notice that data won't be saved to server
-  showToast("Guest mode: Data is stored locally only and won't persist across browsers.");
-  console.log("Started guest session - data will only be saved to localStorage");
+  localStorage.removeItem("planwise_should_show_onboarding");
+  localStorage.removeItem("planwise_onboarding_mode");
+
+  // Persist the initial guest state before navigating
+  saveUserData();
+
+  // Go to dedicated dashboard page
+  window.location.href = "dashboard.html";
 }
 
 // Override saveUserData for guest mode to use localStorage only
@@ -779,7 +767,9 @@ loadUserData = async function() {
 };
 
 function handleLogout() {
-  if (confirm("Are you sure you want to logout?")) {
+  const token = getAuthToken();
+  const isGuest = Boolean(token && token.startsWith("guest_"));
+  if (isGuest || confirm("Are you sure you want to logout?")) {
     // Stop reflection checker
     stopReflectionChecker();
     setAuthToken(null);
@@ -794,7 +784,9 @@ function handleLogout() {
       blockingRules: [],
       dailyHabits: [],
     };
-    showView('landingPage');
+    localStorage.removeItem("planwise_should_show_onboarding");
+    localStorage.removeItem("planwise_onboarding_mode");
+    window.location.href = isGuest ? "index.html#auth" : "index.html";
   }
 }
 
@@ -1107,11 +1099,24 @@ function initLandingPage() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // Always show landing page first
-  showView('landingPage');
+  const isIndexPage = Boolean(document.getElementById("landingPage"));
+  if (!isIndexPage) return;
+
+  // If already authenticated (including guest mode), go straight to dashboard.
+  const token = getAuthToken();
+  if (token) {
+    window.location.replace("dashboard.html");
+    return;
+  }
 
   initAuth();
   initLandingPage();
+
+  const openAuth = window.location.hash === "#auth";
+  showView(openAuth ? "authScreen" : "landingPage");
+  if (openAuth) {
+    $('.auth-tab[data-tab="login"]')?.click();
+  }
 });
 
 function initWeeklyScheduleInputs() {
@@ -1545,10 +1550,7 @@ function initTaskForm() {
       $("#task_priority_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
       $("#planTasksBtn").disabled = state.tasks.length === 0;
       
-      // Auto-generate schedule after task change
-      if (state.tasks.length > 0 && state.profile) {
-        generateSchedule();
-      }
+      regenerateScheduleAndRender();
     });
   }
 
@@ -1571,20 +1573,11 @@ function initTaskForm() {
 }
 
 function initTaskEditorModal() {
-  // Initialize deadline time options for modal
   const modalDeadlineTime = $("#taskEditor_deadline_time");
   if (modalDeadlineTime) {
-    modalDeadlineTime.innerHTML = "";
-    for (let h = 0; h < 24; h++) {
-      for (let m = 0; m < 60; m += 15) {
-        const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-        const opt = document.createElement("option");
-        opt.value = value;
-        opt.textContent = value;
-        modalDeadlineTime.appendChild(opt);
-      }
+    if (!modalDeadlineTime.value) {
+      modalDeadlineTime.value = "23:59";
     }
-    modalDeadlineTime.value = "23:59";
   }
 
   // Add Task button handler
@@ -1619,37 +1612,74 @@ function initTaskEditorModal() {
     overlay.addEventListener("click", closeTaskEditor);
   }
 
-  // Form submission handler and priority button delegation
+  // Form submission handler and urgency/importance button delegation
   const taskEditorForm = $("#taskEditorForm");
   if (taskEditorForm) {
     const newForm = taskEditorForm.cloneNode(true);
     taskEditorForm.parentNode?.replaceChild(newForm, taskEditorForm);
     
-    // Use event delegation for priority buttons (works even after form is cloned)
+    // Use event delegation for urgency/importance buttons (works even after form is cloned)
     newForm.addEventListener("click", (e) => {
-      // Check if clicked element is a priority button
-      const priorityBtn = e.target.closest("#taskEditor_priority_group button");
-      if (priorityBtn) {
+      const urgentBtn = e.target.closest("#taskEditor_urgent_group button");
+      if (urgentBtn) {
         e.preventDefault();
-        const val = priorityBtn.dataset.value;
-        const hiddenInput = $("#taskEditor_priority");
-        if (hiddenInput) {
-          hiddenInput.value = val;
-        }
-        // Update button selected states
-        const priorityGroup = $("#taskEditor_priority_group");
-        if (priorityGroup) {
-          priorityGroup
-            .querySelectorAll("button")
-            .forEach((btn) => btn.classList.toggle("selected", btn === priorityBtn));
-        }
+        const val = urgentBtn.dataset.value;
+        const hiddenInput = $("#taskEditor_urgent");
+        if (hiddenInput) hiddenInput.value = val;
+        $("#taskEditor_urgent_group")
+          ?.querySelectorAll("button")
+          .forEach((btn) => btn.classList.toggle("selected", btn === urgentBtn));
+        updateTaskEditorPriorityFromUrgencyImportance();
+        return;
+      }
+
+      const importantBtn = e.target.closest("#taskEditor_important_group button");
+      if (importantBtn) {
+        e.preventDefault();
+        const val = importantBtn.dataset.value;
+        const hiddenInput = $("#taskEditor_important");
+        if (hiddenInput) hiddenInput.value = val;
+        $("#taskEditor_important_group")
+          ?.querySelectorAll("button")
+          .forEach((btn) => btn.classList.toggle("selected", btn === importantBtn));
+        updateTaskEditorPriorityFromUrgencyImportance();
       }
     });
     
-    newForm.addEventListener("submit", (e) => {
+    newForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const task = readTaskFromEditorForm();
       if (!task) return;
+
+      const isEditing = Boolean(editingTaskId);
+      const submitBtn = newForm.querySelector('button[type="submit"]');
+      const originalLabel = submitBtn?.textContent;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = isEditing ? "Saving..." : "Adding...";
+      }
+
+      try {
+        const urgentHint = $("#taskEditor_urgent")?.value;
+        const importantHint = $("#taskEditor_important")?.value;
+        const aiPriority = await aiDetermineTaskPriority({
+          description: task.task_name,
+          category: task.task_category,
+          deadlineDate: task.task_deadline,
+          deadlineTime: task.task_deadline_time,
+          durationHours: task.task_duration_hours,
+          urgentHint,
+          importantHint,
+        });
+        if (aiPriority) {
+          task.task_priority = aiPriority;
+        }
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = originalLabel || (isEditing ? "Save Changes" : "Add Task");
+        }
+      }
 
       if (editingTaskId) {
         // Update existing task
@@ -1672,20 +1702,8 @@ function initTaskEditorModal() {
       renderTasks();
       renderTaskSummary();
       closeTaskEditor();
-      
-      // Auto-generate schedule after task change
-      if (state.tasks.length > 0 && state.profile) {
-        generateSchedule();
-      } else {
-        // Clear schedule if no tasks
-        state.schedule = [];
-        renderSchedule();
-      }
-      
-      // Auto-generate schedule after task change
-      if (state.tasks.length > 0 && state.profile) {
-        generateSchedule();
-      }
+
+      regenerateScheduleAndRender();
     });
   }
 }
@@ -1711,11 +1729,7 @@ function openTaskEditor(taskId = null) {
     $("#taskEditor_priority").value = task.task_priority || "";
     $("#taskEditor_category").value = task.task_category || "study";
 
-    // Highlight priority button
-    const priorityGroup = $("#taskEditor_priority_group");
-    priorityGroup
-      ?.querySelectorAll("button")
-      .forEach((btn) => btn.classList.toggle("selected", btn.dataset.value === task.task_priority));
+    applyTaskEditorUrgencyImportanceFromPriority(task.task_priority);
 
     if (title) title.textContent = "Edit Task";
     const submitBtn = form.querySelector("button[type=submit]");
@@ -1723,9 +1737,9 @@ function openTaskEditor(taskId = null) {
   } else {
     // Adding new task
     form.reset();
+    clearTaskEditorUrgencyImportance();
     $("#taskEditor_priority").value = "";
     $("#taskEditor_deadline_time").value = "23:59";
-    $("#taskEditor_priority_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
 
     if (title) title.textContent = "Add Task";
     const submitBtn = form.querySelector("button[type=submit]");
@@ -1743,17 +1757,150 @@ function closeTaskEditor() {
   editingTaskId = null;
 }
 
+function priorityFromUrgencyImportance(urgent, important) {
+  const isUrgent = urgent === "yes";
+  const isImportant = important === "yes";
+  if (isUrgent && isImportant) return "Urgent & Important";
+  if (isUrgent && !isImportant) return "Urgent, Not Important";
+  if (!isUrgent && isImportant) return "Important, Not Urgent";
+  return "Not Urgent & Not Important";
+}
+
+function updateTaskEditorPriorityFromUrgencyImportance() {
+  const urgent = $("#taskEditor_urgent")?.value;
+  const important = $("#taskEditor_important")?.value;
+  const priorityInput = $("#taskEditor_priority");
+  if (!priorityInput) return;
+
+  if ((urgent !== "yes" && urgent !== "no") || (important !== "yes" && important !== "no")) {
+    priorityInput.value = "";
+    return;
+  }
+
+  priorityInput.value = priorityFromUrgencyImportance(urgent, important);
+}
+
+function clearTaskEditorUrgencyImportance() {
+  const urgentInput = $("#taskEditor_urgent");
+  const importantInput = $("#taskEditor_important");
+  if (urgentInput) urgentInput.value = "";
+  if (importantInput) importantInput.value = "";
+
+  $("#taskEditor_urgent_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
+  $("#taskEditor_important_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
+  updateTaskEditorPriorityFromUrgencyImportance();
+}
+
+function applyTaskEditorUrgencyImportanceFromPriority(priority) {
+  let urgent = "";
+  let important = "";
+  switch (priority) {
+    case "Urgent & Important":
+      urgent = "yes";
+      important = "yes";
+      break;
+    case "Urgent, Not Important":
+      urgent = "yes";
+      important = "no";
+      break;
+    case "Important, Not Urgent":
+      urgent = "no";
+      important = "yes";
+      break;
+    case "Not Urgent & Not Important":
+      urgent = "no";
+      important = "no";
+      break;
+    default:
+      clearTaskEditorUrgencyImportance();
+      return;
+  }
+
+  const urgentInput = $("#taskEditor_urgent");
+  const importantInput = $("#taskEditor_important");
+  if (urgentInput) urgentInput.value = urgent;
+  if (importantInput) importantInput.value = important;
+
+  $("#taskEditor_urgent_group")
+    ?.querySelectorAll("button")
+    .forEach((btn) => btn.classList.toggle("selected", btn.dataset.value === urgent));
+  $("#taskEditor_important_group")
+    ?.querySelectorAll("button")
+    .forEach((btn) => btn.classList.toggle("selected", btn.dataset.value === important));
+
+  updateTaskEditorPriorityFromUrgencyImportance();
+}
+
+async function aiDetermineTaskPriority({
+  description,
+  category,
+  deadlineDate,
+  deadlineTime,
+  durationHours,
+  urgentHint,
+  importantHint,
+}) {
+  try {
+    const res = await fetch("/api/ai/task-priority", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description,
+        category,
+        deadlineDate,
+        deadlineTime,
+        durationHours,
+        urgentHint,
+        importantHint,
+      }),
+    });
+
+    if (!res.ok) return "";
+    const data = await res.json();
+
+    const allowed = new Set([
+      "Urgent & Important",
+      "Urgent, Not Important",
+      "Important, Not Urgent",
+      "Not Urgent & Not Important",
+    ]);
+    return allowed.has(data.task_priority) ? data.task_priority : "";
+  } catch (err) {
+    console.error("aiDetermineTaskPriority error:", err);
+    return "";
+  }
+}
+
 function readTaskFromEditorForm() {
   const name = $("#taskEditor_name")?.value.trim();
-  const priority = $("#taskEditor_priority")?.value;
   const category = $("#taskEditor_category")?.value;
   const deadlineDate = $("#taskEditor_deadline")?.value;
-  const deadlineTime = $("#taskEditor_deadline_time")?.value || "23:59";
+  const deadlineTimeRaw = $("#taskEditor_deadline_time")?.value?.trim() || "23:59";
+  const deadlineTimeMinutes = parseTimeToMinutes(deadlineTimeRaw);
   const durationHours = parseFloat($("#taskEditor_duration")?.value || "0");
   const computer_required = $("#taskEditor_computer_required")?.checked;
 
-  if (!name || !priority || !category || !deadlineDate || !durationHours) {
-    alert("Please fill in task name, priority, category, deadline, and duration.");
+  const urgent = $("#taskEditor_urgent")?.value;
+  const important = $("#taskEditor_important")?.value;
+  updateTaskEditorPriorityFromUrgencyImportance();
+  const priority = $("#taskEditor_priority")?.value;
+
+  if (deadlineTimeMinutes === null) {
+    alert("Please enter a valid deadline time (HH:MM), e.g., 23:59 or 14:30.");
+    return null;
+  }
+  const deadlineTime = formatMinutesToTime(deadlineTimeMinutes);
+
+  if (!name || !category || !deadlineDate || !durationHours) {
+    alert("Please fill in task description, category, deadline, and duration.");
+    return null;
+  }
+  if ((urgent !== "yes" && urgent !== "no") || (important !== "yes" && important !== "no")) {
+    alert("Please answer the urgent and important questions.");
+    return null;
+  }
+  if (!priority) {
+    alert("Please answer the urgent and important questions.");
     return null;
   }
 
@@ -1798,31 +1945,83 @@ function readTaskFromForm() {
 
 function initGoals() {
   // Goals are now managed in Settings, but allow quick add from dashboard
+  initAddGoalModal();
+
   const addGoalBtn = $("#addGoalBtn");
   if (addGoalBtn) {
     const newBtn = addGoalBtn.cloneNode(true);
     addGoalBtn.parentNode?.replaceChild(newBtn, addGoalBtn);
-    newBtn.addEventListener("click", async () => {
-      const levelInput = prompt(
-        'Goal level? Choose: lifetime, yearly, monthly, weekly, daily.\nLeave blank for "lifetime".',
-      );
-      const normalized =
-        (levelInput || "lifetime").trim().toLowerCase() || "lifetime";
-      const allowed = ["lifetime", "yearly", "monthly", "weekly", "daily"];
-      const finalLevel = allowed.includes(normalized) ? normalized : "lifetime";
-
-      const placeholder = await getGoalNameSuggestion(finalLevel);
-      const name = prompt(
-        `Add a ${finalLevel} goal:`,
-        placeholder || "",
-      );
-      if (!name || !name.trim()) return;
-      addGoal(name.trim(), finalLevel);
+    newBtn.addEventListener("click", () => {
+      openAddGoalModal();
     });
   }
 
   renderGoals();
   updateCategoryDropdown();
+}
+
+function openAddGoalModal() {
+  const modal = $("#addGoalModal");
+  if (!modal) return;
+
+  const levelSelect = $("#goalLevelSelect");
+  if (levelSelect && !levelSelect.value) {
+    levelSelect.value = "lifetime";
+  }
+
+  const nameInput = $("#goalNameInput");
+  if (nameInput) {
+    nameInput.value = "";
+    nameInput.focus();
+  }
+
+  modal.classList.remove("hidden");
+  updateAddGoalNameSuggestion();
+}
+
+function closeAddGoalModal() {
+  $("#addGoalModal")?.classList.add("hidden");
+}
+
+async function updateAddGoalNameSuggestion() {
+  const nameInput = $("#goalNameInput");
+  const levelSelect = $("#goalLevelSelect");
+  if (!nameInput || !levelSelect) return;
+
+  const level = (levelSelect.value || "lifetime").trim().toLowerCase() || "lifetime";
+  const suggestion = await getGoalNameSuggestion(level);
+  if (suggestion && !nameInput.value) {
+    nameInput.placeholder = suggestion;
+  }
+}
+
+function initAddGoalModal() {
+  const modal = $("#addGoalModal");
+  if (!modal || modal.dataset.initialized) return;
+  modal.dataset.initialized = "true";
+
+  const overlay = modal.querySelector(".modal-overlay");
+  overlay?.addEventListener("click", closeAddGoalModal);
+
+  $("#closeAddGoalBtn")?.addEventListener("click", closeAddGoalModal);
+  $("#cancelAddGoalBtn")?.addEventListener("click", closeAddGoalModal);
+
+  $("#goalLevelSelect")?.addEventListener("change", () => {
+    const nameInput = $("#goalNameInput");
+    if (nameInput) nameInput.placeholder = "e.g., Get into Stanford";
+    updateAddGoalNameSuggestion();
+  });
+
+  $("#addGoalForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+
+    const name = $("#goalNameInput")?.value?.trim() || "";
+    const level = ($("#goalLevelSelect")?.value || "lifetime").trim().toLowerCase() || "lifetime";
+    if (!name) return;
+
+    addGoal(name, level);
+    closeAddGoalModal();
+  });
 }
 
 function addGoal(name, level = "lifetime") {
@@ -2854,9 +3053,7 @@ function saveGoalCanvas() {
   syncDailyGoalsToTasks();
   
   // Auto-render calendar if we have tasks
-  if (state.tasks && state.tasks.length > 0 && state.profile) {
-    generateSchedule();
-  }
+  regenerateScheduleAndRender();
 }
 
 // Sync daily goals to tasks
@@ -2963,16 +3160,9 @@ function manualSyncCalendar() {
   // First sync daily goals to tasks
   syncDailyGoalsToTasks();
   
-  // Then regenerate schedule if we have tasks and profile
-  if (state.tasks && state.tasks.length > 0 && state.profile) {
-    console.log("Regenerating schedule with", state.tasks.length, "tasks");
-    generateSchedule();
-  } else {
-    console.log("No tasks or profile available for schedule generation");
-    // Clear schedule if no tasks
-    state.schedule = [];
-    renderSchedule();
-  }
+  // Then regenerate schedule
+  console.log("Regenerating schedule with", (state.tasks || []).length, "tasks");
+  regenerateScheduleAndRender();
   
   // Show feedback
   const syncBtn = $("#syncCalendarBtn");
@@ -3148,16 +3338,23 @@ function deleteTask(taskId) {
   renderRankedPreview();
   
   // Auto-regenerate schedule after task deletion
-  if (state.tasks.length > 0 && state.profile) {
-    generateSchedule();
-  } else {
-    // Clear schedule if no tasks
-    state.schedule = [];
-    renderSchedule();
-  }
+  regenerateScheduleAndRender();
   
   // Update plan button state
   $("#planTasksBtn").disabled = state.tasks.length === 0;
+}
+
+function regenerateScheduleAndRender() {
+  if (!state.profile) {
+    state.schedule = [];
+    state.fixedBlocks = [];
+    renderSchedule();
+    return;
+  }
+
+  rankTasks();
+  generateSchedule();
+  renderSchedule();
 }
 
 function renderTasks() {
@@ -3238,6 +3435,7 @@ function renderTasks() {
       if (task) {
         task.completed = !task.completed;
         saveUserData();
+        regenerateScheduleAndRender();
         // Re-render so completed items move down & get styling
         renderTasks();
         renderTaskSummary();
@@ -3319,7 +3517,7 @@ function startEditTask(taskId) {
 }
 
 function rankTasks() {
-  const tasks = [...state.tasks];
+  const tasks = [...(state.tasks || [])].filter((t) => !t.completed);
   tasks.sort((a, b) => {
     const pa = PRIORITY_WEIGHTS[a.task_priority] ?? 99;
     const pb = PRIORITY_WEIGHTS[b.task_priority] ?? 99;

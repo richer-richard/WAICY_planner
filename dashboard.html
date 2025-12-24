@@ -490,18 +490,18 @@
 
             <div class="form-group">
               <label>Is this task urgent? (needs to be done soon)</label>
-              <div class="urgency-buttons" id="taskEditor_urgent_group">
-                <button type="button" data-value="yes" class="urgency-btn">Yes, it's urgent</button>
-                <button type="button" data-value="no" class="urgency-btn">No, not urgent</button>
+              <div class="button-group" id="taskEditor_urgent_group">
+                <button type="button" data-value="yes">Yes, it's urgent</button>
+                <button type="button" data-value="no">No, not urgent</button>
                 <input type="hidden" id="taskEditor_urgent" />
               </div>
             </div>
 
             <div class="form-group">
               <label>Is this task important? (significant impact on your goals)</label>
-              <div class="importance-buttons" id="taskEditor_important_group">
-                <button type="button" data-value="yes" class="importance-btn">Yes, it's important</button>
-                <button type="button" data-value="no" class="importance-btn">No, not important</button>
+              <div class="button-group" id="taskEditor_important_group">
+                <button type="button" data-value="yes">Yes, it's important</button>
+                <button type="button" data-value="no">No, not important</button>
                 <input type="hidden" id="taskEditor_important" />
               </div>
             </div>
@@ -639,6 +639,7 @@
     </div>
   </div>
 
+  <script src="script.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>
