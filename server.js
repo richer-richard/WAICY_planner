@@ -3,6 +3,9 @@
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const { z } = require("zod");
 const path = require("path");
 const fs = require("fs").promises;
 const bcrypt = require("bcryptjs");
@@ -11,14 +14,31 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "change-this-secret-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
 const USERS_FILE = path.join(__dirname, "users.json");
 const USER_DATA_DIR = path.join(__dirname, "user_data");
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+if (!JWT_SECRET || JWT_SECRET.trim().length < 32) {
+  console.warn(
+    "⚠️  WARNING: JWT_SECRET is not set or is too short. Set JWT_SECRET in .env (>= 32 chars) for secure auth.",
+  );
+}
+
+function normalizeApiKey(key) {
+  if (!key) return "";
+  return String(key).trim().replace(/^Bearer\\s+/i, "");
+}
+
+function maskApiKey(key) {
+  if (!key) return "";
+  if (key.length <= 8) return "********";
+  return `${key.slice(0, 3)}…${key.slice(-4)}`;
+}
+
+const DEEPSEEK_API_KEY = normalizeApiKey(process.env.DEEPSEEK_API_KEY);
 const DEEPSEEK_BASE_URL =
-  process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1/chat/completions";
-const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+  (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1/chat/completions").trim();
+const DEEPSEEK_MODEL = (process.env.DEEPSEEK_MODEL || "deepseek-chat").trim();
 
 if (!DEEPSEEK_API_KEY || DEEPSEEK_API_KEY === "your_deepseek_api_key_here") {
   console.warn(
@@ -31,7 +51,7 @@ if (!DEEPSEEK_API_KEY || DEEPSEEK_API_KEY === "your_deepseek_api_key_here") {
     "   Get your API key from: https://platform.deepseek.com/",
   );
   console.warn(
-    "   DEEPSEEK_API_KEY: ", DEEPSEEK_API_KEY,
+    "   DEEPSEEK_API_KEY: ", maskApiKey(DEEPSEEK_API_KEY),
   );
 }
 
@@ -98,8 +118,67 @@ async function callDeepSeek({
   return reply.trim();
 }
 
-app.use(cors());
-app.use(express.json());
+// --- Security / hardening middleware ---
+app.disable("x-powered-by");
+
+// In production you should lock this down to your real domain(s).
+app.use(cors({ origin: true, credentials: false }));
+app.use(helmet());
+app.use(express.json({ limit: "256kb" }));
+
+// Basic rate limits (tunable)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/api/", apiLimiter);
+app.use("/api/auth/", authLimiter);
+
+function requireJwtSecret(res) {
+  if (!JWT_SECRET || JWT_SECRET.trim().length < 32) {
+    res
+      .status(500)
+      .json({ error: "Server misconfigured: JWT_SECRET must be set (>= 32 chars)." });
+    return false;
+  }
+  return true;
+}
+
+// --- Request validation schemas ---
+const registerSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(8).max(200),
+  name: z.string().min(1).max(100),
+});
+
+const loginSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(1).max(200),
+});
+
+function validateBody(schema) {
+  return (req, res, next) => {
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })),
+      });
+    }
+    req.body = parsed.data;
+    next();
+  };
+}
 
 // Ensure user_data directory exists and users file is initialized
 (async () => {
@@ -150,6 +229,7 @@ async function saveUserData(userId, data) {
 
 // Middleware to verify JWT token
 function authenticateToken(req, res, next) {
+  if (!requireJwtSecret(res)) return;
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
 
@@ -167,18 +247,16 @@ function authenticateToken(req, res, next) {
 }
 
 // Authentication endpoints
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", validateBody(registerSchema), async (req, res) => {
   try {
+    if (!requireJwtSecret(res)) return;
+
     const { email, password, name } = req.body;
-    if (!email || !password || !name) {
-      return res.status(400).json({ error: "Email, password, and name are required" });
-    }
 
     const users = await getUsers();
-    // NOTE: Duplicate signup check disabled for testing - allows same email to sign up multiple times
-    // if (users[email]) {
-    //   return res.status(409).json({ error: "User already exists" });
-    // }
+    if (users[email]) {
+      return res.status(409).json({ error: "User already exists" });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -213,12 +291,11 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", validateBody(loginSchema), async (req, res) => {
   try {
+    if (!requireJwtSecret(res)) return;
+
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
-    }
 
     const users = await getUsers();
     const user = users[email];
@@ -312,7 +389,201 @@ app.post("/api/user/data", authenticateToken, async (req, res) => {
   }
 });
 
+// Profile update endpoint
+app.put("/api/user/profile", authenticateToken, async (req, res) => {
+  try {
+    const { name } = req.body;
+    
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({ error: "Name is required" });
+    }
+
+    const users = await getUsers();
+    const userEmail = req.user.email;
+    
+    if (!users[userEmail]) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Update user name
+    users[userEmail].name = name.trim();
+    users[userEmail].updatedAt = new Date().toISOString();
+    await saveUsers(users);
+
+    res.json({ 
+      success: true, 
+      user: { 
+        id: users[userEmail].id, 
+        email: userEmail, 
+        name: users[userEmail].name 
+      } 
+    });
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Password change endpoint
+app.put("/api/user/password", authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Current and new passwords are required" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: "New password must be at least 8 characters" });
+    }
+
+    const users = await getUsers();
+    const userEmail = req.user.email;
+    const user = users[userEmail];
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Google-only accounts don't have passwords
+    if (!user.password && user.googleId) {
+      return res.status(400).json({ error: "Cannot change password for Google-linked accounts" });
+    }
+
+    // Verify current password
+    const validPassword = await bcrypt.compare(currentPassword, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+
+    // Hash and save new password
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.updatedAt = new Date().toISOString();
+    await saveUsers(users);
+
+    res.json({ success: true, message: "Password updated successfully" });
+  } catch (err) {
+    console.error("Password change error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Account deletion endpoint
+app.delete("/api/user/account", authenticateToken, async (req, res) => {
+  try {
+    const users = await getUsers();
+    const userEmail = req.user.email;
+    
+    if (!users[userEmail]) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userId = users[userEmail].id;
+
+    // Delete user data file
+    const userDataPath = path.join(USER_DATA_DIR, `${userId}.json`);
+    try {
+      await fs.unlink(userDataPath);
+    } catch (err) {
+      // Ignore if file doesn't exist
+      if (err.code !== "ENOENT") {
+        console.error("Error deleting user data file:", err);
+      }
+    }
+
+    // Delete user from users.json
+    delete users[userEmail];
+    await saveUsers(users);
+
+    res.json({ success: true, message: "Account deleted successfully" });
+  } catch (err) {
+    console.error("Account deletion error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Get user info endpoint
+app.get("/api/user/info", authenticateToken, async (req, res) => {
+  try {
+    const users = await getUsers();
+    const user = users[req.user.email];
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({
+      id: user.id,
+      email: req.user.email,
+      name: user.name,
+      createdAt: user.createdAt,
+      googleLinked: !!user.googleId
+    });
+  } catch (err) {
+    console.error("Get user info error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ---------- AI Planning Endpoints (DeepSeek-powered) ----------
+
+app.post("/api/ai/task-priority", async (req, res) => {
+  try {
+    const {
+      description = "",
+      category = "",
+      deadlineDate = "",
+      deadlineTime = "",
+      durationHours = null,
+      urgentHint = "",
+      importantHint = "",
+    } = req.body || {};
+
+    if (!description || typeof description !== "string") {
+      return res.status(400).json({ error: "Missing 'description' in request body." });
+    }
+
+    const normalizedUrgentHint = String(urgentHint || "").trim().toLowerCase();
+    const normalizedImportantHint = String(importantHint || "").trim().toLowerCase();
+
+    const userPrompt = `
+Decide the Eisenhower priority for this task.
+Return JSON only: {"task_priority":"Urgent & Important"|"Urgent, Not Important"|"Important, Not Urgent"|"Not Urgent & Not Important","reason":"short"}.
+- Use the user's urgent/important hints as signals, but you may override if the deadline/duration strongly suggests otherwise.
+Task description: ${description}
+Category: ${category || "unknown"}
+Deadline: ${deadlineDate || "unknown"} ${deadlineTime || ""}
+Estimated duration (hours): ${durationHours ?? "unknown"}
+User says urgent: ${normalizedUrgentHint || "unknown"}
+User says important: ${normalizedImportantHint || "unknown"}
+`.trim();
+
+    const reply = await callDeepSeek({
+      system: "You are an AI planner. Return strict JSON only.",
+      user: userPrompt,
+      temperature: 0.2,
+      maxTokens: 180,
+      expectJSON: true,
+    });
+
+    const parsed = safeParseJSON(reply) || {};
+    const allowed = new Set([
+      "Urgent & Important",
+      "Urgent, Not Important",
+      "Important, Not Urgent",
+      "Not Urgent & Not Important",
+    ]);
+
+    if (!allowed.has(parsed.task_priority)) {
+      return res.status(502).json({ error: "AI returned an invalid task_priority." });
+    }
+
+    res.json({ task_priority: parsed.task_priority, reason: parsed.reason || "" });
+  } catch (err) {
+    console.error("task-priority error:", err);
+    res.status(500).json({ error: err.message || "Task priority failed" });
+  }
+});
 
 app.post("/api/ai/prioritize-tasks", authenticateToken, async (req, res) => {
   try {
@@ -481,10 +752,6 @@ app.use(express.static(path.join(__dirname)));
 
 app.post("/api/chat", async (req, res) => {
   try {
-    if (!DEEPSEEK_API_KEY) {
-      return res.status(500).json({ error: "DEEPSEEK_API_KEY is not configured on the server." });
-    }
-
     const { message, context } = req.body || {};
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "Missing 'message' in request body." });
@@ -500,57 +767,20 @@ app.post("/api/chat", async (req, res) => {
       userContent = `Context:\n${context}\n\nUser question:\n${message}`;
     }
 
-    const payload = {
-      model: "deepseek-chat", // Common model names: "deepseek-chat", "deepseek-reasoner", "deepseek-coder"
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
+    const reply = await callDeepSeek({
+      system: systemPrompt,
+      user: userContent,
       temperature: 0.7,
-      max_tokens: 512,
-    };
-
-    const response = await fetch(DEEPSEEK_BASE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify(payload),
+      maxTokens: 512,
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("DeepSeek API error:", response.status, text);
-      let errorMessage = "Upstream DeepSeek API error.";
-      try {
-        const errorData = JSON.parse(text);
-        if (errorData.error?.message) {
-          errorMessage = errorData.error.message;
-        }
-      } catch (e) {
-        // Use default error message if parsing fails
-      }
-      return res.status(502).json({ 
-        error: errorMessage,
-        details: `Status: ${response.status}. Check your API key and model name.`
-      });
-    }
-
-    const data = await response.json();
-    const reply =
-      data.choices?.[0]?.message?.content?.trim() ||
-      "I had trouble generating a detailed answer, but I’m here to help you prioritize and time-block your work.";
 
     res.json({ reply });
   } catch (err) {
     console.error("Error in /api/chat:", err);
-    res.status(500).json({ error: "Internal server error." });
+    res.status(502).json({ error: err.message || "Upstream AI error." });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Axis server running at http://localhost:${PORT}`);
 });
-
-

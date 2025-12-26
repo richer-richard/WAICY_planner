@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <title>Axis - Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Main Dashboard -->
+    <div id="dashboard" class="dashboard">
+      <!-- Header -->
+      <header class="app-header">
+        <div class="logo">
+          <span class="logo-mark target-icon" aria-hidden="true"></span>
+          <span class="logo-text">Axis</span>
+        </div>
+        <div class="header-message">
+          Precision planning with calm focus
+        </div>
+        <div class="header-actions">
+          <button id="settingsBtn" class="btn-icon" title="Settings">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="10" cy="10" r="3"/>
+              <path d="M10 1v4M10 15v4M19 10h-4M5 10H1M16.66 3.34l-2.83 2.83M6.17 13.83l-2.83 2.83M16.66 16.66l-2.83-2.83M6.17 6.17L3.34 3.34"/>
+            </svg>
+          </button>
+          <button id="logoutBtn" class="btn-icon" title="Logout">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5M13 7l4 4-4 4M17 11H7"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="app-main">
+      <!-- Left Sidebar -->
+      <aside class="sidebar">
+        <!-- Goals Section -->
+        <section class="panel panel-goals">
+          <div class="panel-header">
+            <div class="panel-header-row">
+              <div>
+            <h2>Goals Hierarchy</h2>
+            <span class="panel-subtitle">Your goals across different timeframes</span>
+              </div>
+              <button id="addGoalBtn" class="btn btn-secondary btn-sm">+ Add goal</button>
+            </div>
+          </div>
+          <div class="goals-content">
+            <div id="goalsList" class="goals-list-hierarchy">
+              <!-- Goals populated by JS with hierarchy -->
+            </div>
+          </div>
+        </section>
+
+        <!-- To-Do List -->
+        <!-- Task Analytics Panel -->
+        <section class="panel panel-analytics">
+          <div class="panel-header">
+            <div class="panel-header-row">
+              <div>
+                <h2>📊 Task Analytics</h2>
+                <span class="panel-subtitle">Your productivity insights</span>
+              </div>
+              <button type="button" id="toggleAnalyticsBtn" class="btn btn-ghost btn-sm">Expand</button>
+            </div>
+          </div>
+          <div id="analyticsContent" class="analytics-content">
+            <div class="analytics-summary">
+              <div class="analytics-stat">
+                <div class="analytics-stat-value" id="statTotalTasks">0</div>
+                <div class="analytics-stat-label">Total Tasks</div>
+              </div>
+              <div class="analytics-stat">
+                <div class="analytics-stat-value" id="statCompletedTasks">0</div>
+                <div class="analytics-stat-label">Completed</div>
+              </div>
+              <div class="analytics-stat">
+                <div class="analytics-stat-value" id="statCompletionRate">0%</div>
+                <div class="analytics-stat-label">Completion Rate</div>
+              </div>
+            </div>
+            <div id="analyticsExpanded" class="analytics-expanded hidden">
+              <div class="analytics-section">
+                <h4>Priority Distribution</h4>
+                <div id="priorityDistribution" class="priority-distribution"></div>
+              </div>
+              <div class="analytics-section">
+                <h4>Category Breakdown</h4>
+                <div id="categoryBreakdown" class="category-breakdown"></div>
+              </div>
+              <div class="analytics-section">
+                <h4>This Week's Progress</h4>
+                <div id="weeklyProgress" class="weekly-progress"></div>
+              </div>
+              <div class="analytics-section">
+                <h4>Productivity Score</h4>
+                <div id="productivityScore" class="productivity-score">
+                  <div class="score-ring">
+                    <svg viewBox="0 0 36 36" class="score-ring-svg">
+                      <path class="score-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                      <path id="scoreRingFill" class="score-ring-fill" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    </svg>
+                    <div class="score-value" id="scoreValue">0</div>
+                  </div>
+                  <div class="score-label" id="scoreLabel">Getting Started</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel panel-tasks">
+          <div class="panel-header">
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+              <div>
+                <h2>To‑Do List</h2>
+                <span class="panel-subtitle">Ranked by urgency &amp; deadlines</span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button type="button" id="toggleMatrixBtn" class="btn btn-ghost btn-sm" title="Toggle Eisenhower Matrix view">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="1" y="1" width="5" height="5" rx="1"/>
+                    <rect x="8" y="1" width="5" height="5" rx="1"/>
+                    <rect x="1" y="8" width="5" height="5" rx="1"/>
+                    <rect x="8" y="8" width="5" height="5" rx="1"/>
+                  </svg>
+                </button>
+                <button type="button" id="addTaskBtn" class="btn btn-primary" style="padding: 6px 12px; font-size: 0.75rem;" title="Add new task">
+                  + Add Task
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Eisenhower Matrix View -->
+          <div id="eisenhowerMatrix" class="eisenhower-matrix hidden">
+            <div class="matrix-quadrant quadrant-urgent-important">
+              <div class="quadrant-header">
+                <span class="quadrant-icon">🔥</span>
+                <span class="quadrant-title">Do First</span>
+                <span class="quadrant-label">Urgent & Important</span>
+              </div>
+              <div class="quadrant-tasks" data-priority="Urgent & Important"></div>
+            </div>
+            <div class="matrix-quadrant quadrant-important-not-urgent">
+              <div class="quadrant-header">
+                <span class="quadrant-icon">📅</span>
+                <span class="quadrant-title">Schedule</span>
+                <span class="quadrant-label">Important, Not Urgent</span>
+              </div>
+              <div class="quadrant-tasks" data-priority="Important, Not Urgent"></div>
+            </div>
+            <div class="matrix-quadrant quadrant-urgent-not-important">
+              <div class="quadrant-header">
+                <span class="quadrant-icon">📤</span>
+                <span class="quadrant-title">Delegate</span>
+                <span class="quadrant-label">Urgent, Not Important</span>
+              </div>
+              <div class="quadrant-tasks" data-priority="Urgent, Not Important"></div>
+            </div>
+            <div class="matrix-quadrant quadrant-not-urgent-not-important">
+              <div class="quadrant-header">
+                <span class="quadrant-icon">🗑️</span>
+                <span class="quadrant-title">Eliminate</span>
+                <span class="quadrant-label">Not Urgent & Not Important</span>
+              </div>
+              <div class="quadrant-tasks" data-priority="Not Urgent & Not Important"></div>
+            </div>
+          </div>
+          <!-- List View -->
+          <div id="taskList" class="task-list">
+            <!-- Tasks populated by JS -->
+          </div>
+        </section>
+
+        <!-- Daily Habits -->
+        <section class="panel panel-habits">
+          <div class="panel-header">
+            <h2>Daily Habits</h2>
+            <span class="panel-subtitle">Fixed tasks you can set up</span>
+          </div>
+          <div class="habits-content">
+            <button type="button" id="addHabitBtn" class="btn-add-goal" title="Add a new habit">
+              <span class="btn-add-goal-icon">+</span>
+              <span>Add Daily Habit</span>
+            </button>
+            <div id="habitsList" class="habits-list">
+              <!-- Daily habits populated by JS -->
+            </div>
+          </div>
+        </section>
+
+        <!-- Chatbot -->
+        <section class="panel panel-chat">
+          <div class="panel-header">
+            <h2>Axis Assistant</h2>
+            <span class="panel-subtitle">Ask for planning &amp; focus tips</span>
+          </div>
+          <div id="chatWindow" class="chat-window">
+            <!-- Chat messages -->
+          </div>
+          <form id="chatForm" class="chat-input-row">
+            <input
+              type="text"
+              id="chatInput"
+              placeholder="Ask me anything about your schedule..."
+              autocomplete="off"
+            />
+            <button type="submit" class="btn btn-primary">Send</button>
+          </form>
+        </section>
+      </aside>
+
+      <!-- Middle: Calendar -->
+      <section class="calendar-section">
+        <header class="calendar-header">
+          <div class="calendar-title">
+            <h2>Your AI‑generated schedule</h2>
+            <span id="calendarSubtitle" class="calendar-subtitle">
+              Once generated, your time‑blocked plan will appear here.
+            </span>
+          </div>
+          <div class="calendar-controls">
+            <button id="syncCalendarBtn" class="btn btn-secondary btn-sync" title="Sync daily goals to tasks and regenerate schedule">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                <path d="M1 8v6h6M15 8V2H9M1 8l6-6M15 8l-6 6"/>
+              </svg>
+              Sync Calendar
+            </button>
+            <button class="btn-toggle-view active" data-view="daily">Daily</button>
+            <button class="btn-toggle-view" data-view="weekly">Weekly</button>
+            <button class="btn-toggle-view" data-view="monthly">Monthly</button>
+          </div>
+        </header>
+
+        <div id="calendarContainer" class="calendar-container">
+          <!-- Calendar rendered by JS -->
+        </div>
+      </section>
+
+
+      <!-- Multi-step onboarding modal (only shown during signup) -->
+      <div id="wizard" class="wizard-modal hidden">
+        <div class="wizard-overlay"></div>
+        <div class="wizard-content">
+          <section class="wizard">
+        <!-- Step indicators -->
+        <div class="wizard-steps">
+          <div class="wizard-step-indicator" data-step="1">1. Profile</div>
+          <div class="wizard-step-indicator" data-step="2">2. Goals</div>
+        </div>
+
+          <!-- Step 1: Onboarding -->
+          <div class="wizard-step" data-step="1">
+            <h2>Step 1: Tell Axis about you</h2>
+            <p class="step-description">
+              I'll create a realistic plan around your real life, not the other way around.
+            </p>
+
+            <form id="profileForm" class="form-grid">
+              <!-- Basic Info -->
+              <fieldset>
+                <legend>Basic Info</legend>
+                <label>
+                  Name
+                  <input type="text" id="user_name" required />
+                </label>
+
+                <label>
+                  Age group
+                  <select id="user_age_group" required>
+                    <option value="">Select...</option>
+                    <option>Middle School</option>
+                    <option>High School</option>
+                    <option>College</option>
+                    <option>Other</option>
+                  </select>
+                </label>
+              </fieldset>
+
+              <!-- Schedule & Routine -->
+              <fieldset>
+                <legend>Schedule &amp; Routine</legend>
+                <div class="subsection">
+                  <label>Weekly schedule (Mon‑Fri)</label>
+                  <p class="hint">
+                    Add multiple fixed commitments per day (classes, clubs, etc.). Each needs a name, time range, and optional description.
+                  </p>
+                  <div id="weekly_schedule" class="weekly-grid">
+                    <!-- Generated by JS -->
+                  </div>
+                </div>
+
+                <div class="subsection">
+                  <label>Weekend fixed activities (Sat & Sun)</label>
+                  <p class="hint">
+                    Add multiple fixed activities for weekends. Each needs a day, name, time range, and optional description.
+                  </p>
+                  <div id="weekend_schedule" class="weekend-grid">
+                    <!-- Generated by JS -->
+                  </div>
+                </div>
+
+                <div class="two-col">
+                  <label>
+                    Typical sleep (weekdays)
+                    <input type="text" id="sleep_weekdays" placeholder="23:00‑07:00" />
+                  </label>
+                  <label>
+                    Typical sleep (weekends)
+                    <input type="text" id="sleep_weekends" placeholder="00:00‑09:00" />
+                  </label>
+                </div>
+
+                <label>
+                  Standard break times (e.g., lunch)
+                  <input type="text" id="break_times" placeholder="12:30‑13:00 lunch; 18:00‑18:30 dinner" />
+                </label>
+              </fieldset>
+
+              <!-- Learning Personalization -->
+              <fieldset>
+                <legend>Learning Personalization</legend>
+
+                <div class="button-group" id="is_procrastinator_group">
+                  <span class="label-inline">Do you tend to procrastinate?</span>
+                  <button type="button" data-value="yes">Yes</button>
+                  <button type="button" data-value="no">No</button>
+                  <input type="hidden" id="is_procrastinator" />
+                </div>
+
+                <div id="procrastinator_yes" class="conditional-row hidden">
+                  <label>
+                    Procrastinator type
+                    <select id="procrastinator_type">
+                      <option value="">Select...</option>
+                      <option>perfectionist</option>
+                      <option>avoidant</option>
+                      <option>deadline-driven</option>
+                      <option>overwhelmed</option>
+                      <option>distraction</option>
+                      <option>lack-of-motivation</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div id="procrastinator_no" class="conditional-row hidden">
+                  <div class="button-group" id="has_trouble_finishing_group">
+                    <span class="label-inline">Do you have trouble finishing?</span>
+                    <button type="button" data-value="Yes, sometimes">Yes, sometimes</button>
+                    <button type="button" data-value="No, I'm consistent">No, I'm consistent</button>
+                    <input type="hidden" id="has_trouble_finishing" />
+                  </div>
+                </div>
+
+                <div class="two-col">
+                  <label>
+                    Preferred work style
+                    <select id="preferred_work_style">
+                      <option value="">Select...</option>
+                      <option>Short, focused bursts</option>
+                      <option>Long, deep sessions</option>
+                      <option>A mix of both</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="two-col">
+                  <label>
+                    Most productive time of day
+                    <select id="most_productive_time">
+                      <option value="">Select...</option>
+                      <option>Early Morning</option>
+                      <option>Morning</option>
+                      <option>Afternoon</option>
+                      <option>Evening</option>
+                      <option>Late Night</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Preferred study method
+                    <input
+                      type="text"
+                      id="preferred_study_method"
+                      placeholder="e.g., 25-min study, 5-min break"
+                    />
+                  </label>
+                </div>
+              </fieldset>
+
+              <!-- Work-Life Balance -->
+              <fieldset>
+                <legend>Work‑Life Balance</legend>
+                <div class="two-col">
+                  <label>
+                    Weekly personal (no‑work) hours
+                    <input
+                      type="number"
+                      id="weekly_personal_time"
+                      min="0"
+                      max="80"
+                      step="0.5"
+                      placeholder="e.g., 10"
+                    />
+                  </label>
+                  <label>
+                    Weekly review hours
+                    <input
+                      type="number"
+                      id="weekly_review_hours"
+                      min="0"
+                      max="40"
+                      step="0.5"
+                      placeholder="e.g., 3"
+                    />
+                  </label>
+                </div>
+              </fieldset>
+
+              <!-- Goals Hierarchy -->
+              <fieldset>
+                <legend>Goals Hierarchy</legend>
+                <p class="hint">
+                  Set your goals across different timeframes. The AI will help you break them down and organize your tasks accordingly.
+                </p>
+                <div id="onboardingGoalsHierarchy" class="goals-hierarchy">
+                  <!-- Goals will be rendered here by JS -->
+                </div>
+              </fieldset>
+
+              <div class="wizard-actions">
+                <button type="button" id="saveProfileBtn" class="btn btn-primary">
+                  Save profile &amp; continue
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Step 2: Goal Canvas -->
+          <div class="wizard-step" data-step="2">
+            <h2>Step 2: Set Your Goals</h2>
+            <p class="step-description">
+              Create your goal hierarchy by adding long-term goals. Choose your preferred timeframe, and AI will suggest breakdown goals automatically.
+            </p>
+
+            <div class="goal-canvas-container">
+              <div id="goalCanvas" class="goal-canvas">
+                <!-- Canvas sections and nodes will be rendered here -->
+                <button id="approveAllGhostsBtn" class="btn-approve-all-ghosts hidden">
+                  Approve All AI Suggestions
+                </button>
+              </div>
+              <div id="goalEditorPanel" class="goal-editor-panel hidden">
+                <h3>Edit Goal</h3>
+                <textarea id="goalEditorText" placeholder="Enter your goal..." rows="4"></textarea>
+                <div class="goal-editor-actions">
+                  <button id="saveGoalBtn" class="btn btn-primary">Save</button>
+                  <button id="confirmGhostBtn" class="btn btn-success hidden">Confirm Suggestion</button>
+                  <button id="deleteGoalBtn" class="btn btn-ghost">Delete</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="wizard-actions wizard-actions-bottom">
+              <button type="button" id="backToProfileBtn" class="btn btn-ghost">Back</button>
+              <button type="button" id="finishGoalsBtn" class="btn btn-primary">Finish</button>
+            </div>
+          </div>
+
+          <!-- Step 3: Confirmation -->
+          <div class="wizard-step" data-step="3">
+            <h2>Step 3: Confirm your plan</h2>
+            <p class="step-description">
+              Here's how I'm ranking your tasks. I'll schedule them so everything is completed
+              <strong>before</strong> the deadline.
+            </p>
+
+            <div id="rankedTaskPreview" class="ranked-preview">
+              <!-- Ranked tasks inserted here -->
+            </div>
+
+            <p class="confirm-text">
+              Thank you, I have all the information.
+              <br />
+              <strong>Are you ready for me to create your personalized schedule?</strong>
+            </p>
+
+            <div class="confirm-actions">
+              <button id="confirmGenerateBtn" class="btn btn-success">
+                Yes ✅
+              </button>
+              <button id="editTasksBtn" class="btn btn-ghost">
+                Wait a sec... 🤔
+              </button>
+            </div>
+          </div>
+        </section>
+        </div>
+      </div>
+      </main>
+
+      <!-- Countdown overlay for deadline-driven procrastinators -->
+    <div id="countdownOverlay" class="countdown-overlay hidden">
+      <div class="countdown-card">
+        <h3>Focus countdown</h3>
+        <p id="countdownTaskName"></p>
+        <div id="countdownTimer" class="countdown-timer">25:00</div>
+        <button id="stopCountdownBtn" class="btn btn-secondary">Stop</button>
+      </div>
+    </div>
+
+      <!-- Settings Panel -->
+      <div id="settingsPanel" class="settings-panel hidden">
+        <div class="settings-overlay"></div>
+        <div class="settings-content">
+          <div class="settings-header">
+            <h2>Settings</h2>
+            <button id="closeSettingsBtn" class="btn-icon" title="Close">×</button>
+          </div>
+          <div class="settings-tabs">
+            <button class="settings-tab active" data-tab="profile">Profile</button>
+            <button class="settings-tab" data-tab="account">Account</button>
+            <button class="settings-tab" data-tab="goals">Goals</button>
+            <button class="settings-tab" data-tab="blocking">Focus & Blocking</button>
+            <button class="settings-tab" data-tab="reflections">Reflections</button>
+            <button class="settings-tab" data-tab="data">Data</button>
+          </div>
+          
+          <!-- Profile Settings -->
+          <div id="settingsProfile" class="settings-section active">
+            <h3>Edit Profile</h3>
+            <div id="profileSaveStatus" class="save-status"></div>
+            <form id="profileEditForm" class="settings-form">
+              <div class="form-group">
+                <label>Display Name</label>
+                <input type="text" id="profileEditName" placeholder="Your name" required />
+              </div>
+              <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="profileEditEmail" disabled />
+                <small class="form-hint">Email cannot be changed</small>
+              </div>
+              <div class="form-group">
+                <label>Account Created</label>
+                <input type="text" id="profileCreatedAt" disabled />
+              </div>
+              <button type="submit" class="btn btn-primary" id="saveProfileBtn">Save Changes</button>
+            </form>
+            
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid var(--border-subtle);">
+            
+            <h3>Learning Preferences</h3>
+            <p class="settings-description">Update your learning personalization settings.</p>
+            <button type="button" class="btn btn-secondary" id="editLearningPrefsBtn">
+              Edit Learning Preferences
+            </button>
+          </div>
+
+          <!-- Account Settings -->
+          <div id="settingsAccount" class="settings-section">
+            <h3>Change Password</h3>
+            <div id="passwordChangeStatus" class="save-status"></div>
+            <form id="passwordChangeForm" class="settings-form">
+              <div class="form-group">
+                <label>Current Password</label>
+                <input type="password" id="currentPassword" placeholder="Enter current password" />
+              </div>
+              <div class="form-group">
+                <label>New Password</label>
+                <input type="password" id="newPassword" placeholder="Enter new password (min 8 characters)" minlength="8" />
+              </div>
+              <div class="form-group">
+                <label>Confirm New Password</label>
+                <input type="password" id="confirmNewPassword" placeholder="Confirm new password" />
+              </div>
+              <button type="submit" class="btn btn-primary" id="changePasswordBtn">Change Password</button>
+            </form>
+            
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid var(--border-subtle);">
+            
+            <h3 style="color: #dc2626;">Danger Zone</h3>
+            <p class="settings-description" style="color: #991b1b;">
+              Once you delete your account, there is no going back. All your data will be permanently removed.
+            </p>
+            <button type="button" class="btn btn-ghost" id="deleteAccountBtn" 
+                    style="color: #dc2626; border-color: #dc2626;">
+              Delete My Account
+            </button>
+          </div>
+
+          <!-- Goals Settings -->
+          <div id="settingsGoals" class="settings-section">
+            <h3>Goals Hierarchy</h3>
+            <p class="settings-description">Manage your goals across different timeframes.</p>
+            <div id="goalsHierarchy" class="goals-hierarchy">
+              <!-- Goals hierarchy will be rendered here -->
+            </div>
+          </div>
+
+          <!-- Focus & Blocking Settings -->
+          <div id="settingsBlocking" class="settings-section">
+            <div id="focusModePanel">
+              <!-- Focus mode panel will be rendered here by blocker component -->
+            </div>
+            
+            <h3>Website Blocking Rules</h3>
+            <p class="settings-description">
+              Configure rules to block or redirect distracting websites during focus time.
+              These rules are enforced when focus mode is active.
+            </p>
+            <div id="blockingRulesList" class="blocking-rules-list">
+              <!-- Blocking rules will be rendered here -->
+            </div>
+            <div style="display: flex; gap: 12px; margin-top: 16px;">
+              <button id="addBlockingRuleBtn" class="btn btn-secondary">+ Add Rule</button>
+              <button id="addCommonRulesBtn" class="btn btn-ghost">Add Common Sites</button>
+            </div>
+          </div>
+
+          <!-- Reflections Settings -->
+          <div id="settingsReflections" class="settings-section">
+            <h3>Reflection History</h3>
+            <p class="settings-description">
+              View your past reflections and AI-generated insights.
+            </p>
+            <div id="reflectionsList" class="reflections-list">
+              <!-- Reflection history will be rendered here -->
+            </div>
+            <div style="margin-top: 16px;">
+              <button type="button" class="btn btn-primary" id="newReflectionBtn">
+                Write New Reflection
+              </button>
+            </div>
+          </div>
+
+          <!-- Data Management Settings -->
+          <div id="settingsData" class="settings-section">
+            <h3>📥 Export Data</h3>
+            <p class="settings-description">
+              Download all your data including tasks, goals, habits, schedule, and profile settings.
+            </p>
+            <div class="data-export-options">
+              <button type="button" class="btn btn-primary" id="exportAllDataBtn">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <path d="M8 2v8m0 0L5 7m3 3l3-3"/>
+                  <path d="M2 14h12"/>
+                </svg>
+                Export All Data (JSON)
+              </button>
+              <button type="button" class="btn btn-secondary" id="exportTasksCSVBtn">
+                Export Tasks (CSV)
+              </button>
+            </div>
+            
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid var(--border-subtle);">
+            
+            <h3>📤 Import Data</h3>
+            <p class="settings-description">
+              Import data from a previously exported JSON file. This will merge with your existing data.
+            </p>
+            <div class="data-import-options">
+              <input type="file" id="importDataFile" accept=".json" style="display: none;" />
+              <button type="button" class="btn btn-secondary" id="importDataBtn">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <path d="M8 10V2m0 0L5 5m3-3l3 3"/>
+                  <path d="M2 14h12"/>
+                </svg>
+                Import Data (JSON)
+              </button>
+              <div id="importStatus" class="import-status"></div>
+            </div>
+            
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid var(--border-subtle);">
+            
+            <h3>📊 Data Summary</h3>
+            <div id="dataSummary" class="data-summary">
+              <div class="data-summary-item">
+                <span class="data-summary-label">Total Tasks:</span>
+                <span class="data-summary-value" id="summaryTotalTasks">0</span>
+              </div>
+              <div class="data-summary-item">
+                <span class="data-summary-label">Completed Tasks:</span>
+                <span class="data-summary-value" id="summaryCompletedTasks">0</span>
+              </div>
+              <div class="data-summary-item">
+                <span class="data-summary-label">Goals:</span>
+                <span class="data-summary-value" id="summaryGoals">0</span>
+              </div>
+              <div class="data-summary-item">
+                <span class="data-summary-label">Daily Habits:</span>
+                <span class="data-summary-value" id="summaryHabits">0</span>
+              </div>
+              <div class="data-summary-item">
+                <span class="data-summary-label">Reflections:</span>
+                <span class="data-summary-value" id="summaryReflections">0</span>
+              </div>
+              <div class="data-summary-item">
+                <span class="data-summary-label">Blocking Rules:</span>
+                <span class="data-summary-value" id="summaryBlockingRules">0</span>
+              </div>
+            </div>
+            
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid var(--border-subtle);">
+            
+            <h3 style="color: #dc2626;">🗑️ Clear Data</h3>
+            <p class="settings-description" style="color: #991b1b;">
+              Clear specific data categories. This cannot be undone.
+            </p>
+            <div class="data-clear-options">
+              <button type="button" class="btn btn-ghost" id="clearCompletedTasksBtn" style="color: #dc2626; border-color: #dc2626;">
+                Clear Completed Tasks
+              </button>
+              <button type="button" class="btn btn-ghost" id="clearAllTasksBtn" style="color: #dc2626; border-color: #dc2626;">
+                Clear All Tasks
+              </button>
+              <button type="button" class="btn btn-ghost" id="clearScheduleBtn" style="color: #dc2626; border-color: #dc2626;">
+                Clear Schedule
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Task Editor Modal -->
+      <div id="taskEditorModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="taskEditorTitle">Add Task</h2>
+            <button id="closeTaskEditorBtn" class="btn-icon" title="Close">×</button>
+          </div>
+          <form id="taskEditorForm" class="modal-form">
+            <div class="form-group">
+              <label for="taskEditor_name">Task description</label>
+              <input type="text" id="taskEditor_name" required />
+            </div>
+
+            <div class="form-group">
+              <label>Is this task urgent? (needs to be done soon)</label>
+              <div class="button-group" id="taskEditor_urgent_group">
+                <button type="button" data-value="yes">Yes, it's urgent</button>
+                <button type="button" data-value="no">No, not urgent</button>
+                <input type="hidden" id="taskEditor_urgent" />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Is this task important? (significant impact on your goals)</label>
+              <div class="button-group" id="taskEditor_important_group">
+                <button type="button" data-value="yes">Yes, it's important</button>
+                <button type="button" data-value="no">No, not important</button>
+                <input type="hidden" id="taskEditor_important" />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="taskEditor_category">Category</label>
+              <select id="taskEditor_category" required>
+                <option value="">Select...</option>
+                <option value="study">Study</option>
+                <option value="project">Project</option>
+                <option value="chores">Chores</option>
+                <option value="personal">Personal</option>
+                <option value="social">Social</option>
+              </select>
+            </div>
+
+            <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div>
+                <label for="taskEditor_deadline">Deadline (date)</label>
+                <input type="date" id="taskEditor_deadline" required />
+              </div>
+              <div>
+                <label for="taskEditor_deadline_time">Deadline time</label>
+                <input type="text" id="taskEditor_deadline_time" placeholder="e.g., 23:59 or 14:30" value="23:59" />
+              </div>
+            </div>
+
+            <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div>
+                <label for="taskEditor_duration">Estimated duration (hours)</label>
+                <input
+                  type="number"
+                  id="taskEditor_duration"
+                  min="0.5"
+                  step="0.5"
+                  placeholder="e.g., 2"
+                  required
+                />
+              </div>
+              <div style="display: flex; align-items: flex-end;">
+                <label class="checkbox-row" style="margin: 0;">
+                  <input type="checkbox" id="taskEditor_computer_required" />
+                  <span>Requires computer?</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="taskEditor_recurrence">Repeat this task</label>
+              <select id="taskEditor_recurrence">
+                <option value="">No repeat (one-time task)</option>
+                <option value="daily">Daily</option>
+                <option value="weekdays">Weekdays (Mon-Fri)</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="monthly">Monthly</option>
+              </select>
+              <small class="form-hint">Recurring tasks will auto-regenerate after completion</small>
+            </div>
+
+            <input type="hidden" id="taskEditor_priority" />
+
+            <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+              <button type="button" id="cancelTaskEditorBtn" class="btn btn-ghost">Cancel</button>
+              <button type="submit" class="btn btn-primary">Add Task</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Add Goal Modal -->
+      <div id="addGoalModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Add Goal</h2>
+            <button id="closeAddGoalBtn" class="btn-icon" title="Close">×</button>
+          </div>
+          <form id="addGoalForm" class="modal-form">
+            <div class="form-group">
+              <label for="goalLevelSelect">Goal timeframe</label>
+              <select id="goalLevelSelect" required>
+                <option value="lifetime">Lifetime</option>
+                <option value="yearly">Yearly</option>
+                <option value="monthly">Monthly</option>
+                <option value="weekly">Weekly</option>
+                <option value="daily">Daily</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="goalNameInput">Goal description</label>
+              <input type="text" id="goalNameInput" placeholder="Enter your goal..." required />
+            </div>
+            <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+              <button type="button" id="cancelAddGoalBtn" class="btn btn-ghost">Cancel</button>
+              <button type="submit" class="btn btn-primary">Add Goal</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Reflection Modal -->
+      <div id="reflectionModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content modal-content-large">
+          <div class="modal-header">
+            <h2 id="reflectionTitle">Reflection</h2>
+            <button id="closeReflectionBtn" class="btn-icon" title="Close">×</button>
+          </div>
+          <form id="reflectionForm" class="modal-form">
+            <div class="form-group">
+              <label>Reflection</label>
+              <textarea id="reflectionText" rows="12" placeholder="Write your reflection here..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Save Reflection</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Pomodoro Timer Modal -->
+      <div id="pomodoroModal" class="pomodoro-modal hidden">
+        <div class="pomodoro-modal-content">
+          <div class="pomodoro-header">
+            <h2>Focus Timer</h2>
+            <button id="closePomodoroBtn" class="pomodoro-close-btn" title="Close">×</button>
+          </div>
+          <div class="pomodoro-task-info">
+            <p id="pomodoroTaskName" class="pomodoro-task-name"></p>
+            <p id="pomodoroTaskCategory" class="pomodoro-task-category"></p>
+          </div>
+          <div class="pomodoro-timer-display">
+            <div id="pomodoroTimer" class="pomodoro-timer">25:00</div>
+            <div class="pomodoro-status" id="pomodoroStatus">Ready to start</div>
+          </div>
+          <div class="pomodoro-controls">
+            <button id="pomodoroStartBtn" class="btn btn-primary pomodoro-btn">Start</button>
+            <button id="pomodoroPauseBtn" class="btn btn-secondary pomodoro-btn hidden">Pause</button>
+            <button id="pomodoroResetBtn" class="btn btn-secondary pomodoro-btn">Reset</button>
+          </div>
+          <div class="pomodoro-progress">
+            <div id="pomodoroProgressBar" class="pomodoro-progress-bar">
+              <div id="pomodoroProgressFill" class="pomodoro-progress-fill"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

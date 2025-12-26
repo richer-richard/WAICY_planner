@@ -33,6 +33,99 @@ let state = {
   firstReflectionDueDate: null, // ISO date string for when first weekly reflection is due (7 days after signup)
 };
 
+// ------------------------------
+// Data model normalization layer
+// ------------------------------
+// Over time, this project accumulated multiple task shapes:
+// - canonical UI tasks: { task_name, task_priority, task_category, task_deadline, task_deadline_time, task_duration_hours }
+// - daily-goal generated tasks (older): { name, priority, category, deadline, estimatedHours }
+// A professional app should be strict about its data model.
+// The functions below migrate/normalize tasks into the canonical shape.
+
+function normalizeTaskPriority(value) {
+  if (!value) return "";
+  const v = String(value).trim();
+  // Canonical values
+  const allowed = new Set([
+    "Urgent & Important",
+    "Urgent, Not Important",
+    "Important, Not Urgent",
+    "Not Urgent & Not Important",
+  ]);
+  if (allowed.has(v)) return v;
+
+  // Legacy / shorthand mappings
+  const legacy = {
+    "urgent-important": "Urgent & Important",
+    "urgent-not-important": "Urgent, Not Important",
+    "important-not-urgent": "Important, Not Urgent",
+    "not-urgent-not-important": "Not Urgent & Not Important",
+  };
+  const key = v.toLowerCase().replace(/[^a-z]+/g, "-");
+  return legacy[key] || "";
+}
+
+function normalizeTaskCategory(value) {
+  if (!value) return "study";
+  return String(value).trim().toLowerCase();
+}
+
+function normalizeTask(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  // If already canonical-ish
+  const task_name = raw.task_name ?? raw.name ?? raw.title ?? "";
+  const task_priority = normalizeTaskPriority(raw.task_priority ?? raw.priority);
+  const task_category = normalizeTaskCategory(raw.task_category ?? raw.category);
+  const task_deadline = raw.task_deadline ?? raw.deadline ?? "";
+  const task_deadline_time = raw.task_deadline_time ?? raw.deadlineTime ?? "23:59";
+  const task_duration_hours =
+    Number(raw.task_duration_hours ?? raw.estimatedHours ?? raw.durationHours ?? raw.duration ?? 0) || 0;
+
+  // Preserve flags
+  const computer_required = Boolean(raw.computer_required ?? raw.computerRequired ?? false);
+  const completed = typeof raw.completed === "boolean" ? raw.completed : false;
+
+  const id = raw.id || `task_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  return {
+    id,
+    task_name: String(task_name || "").trim(),
+    task_priority,
+    task_category,
+    task_deadline,
+    task_deadline_time: String(task_deadline_time || "23:59").trim(),
+    task_duration_hours: task_duration_hours,
+    computer_required,
+    completed,
+
+    // Migration metadata (kept for debugging/back-compat)
+    fromDailyGoal: Boolean(raw.fromDailyGoal),
+    goalId: raw.goalId || null,
+  };
+}
+
+function normalizeAllTasksInState() {
+  if (!state.tasks || !Array.isArray(state.tasks)) {
+    state.tasks = [];
+    return;
+  }
+  let changed = false;
+  const normalized = [];
+  for (const t of state.tasks) {
+    const nt = normalizeTask(t);
+    if (!nt) continue;
+    normalized.push(nt);
+    // Detect changes by presence of legacy keys or missing canonical keys
+    if (t.name || t.priority || t.category || t.estimatedHours || t.deadline) changed = true;
+    if (!t.task_name || !t.task_priority || !t.task_category) changed = true;
+  }
+  state.tasks = normalized;
+  if (changed) {
+    saveUserData();
+  }
+}
+
 // Authentication state
 let authToken = null;
 let currentUser = null;
@@ -125,6 +218,7 @@ async function loadUserData() {
     migrateProfileData();
     migrateGoalsData();
     ensureTaskIds();
+    normalizeAllTasksInState();
     return true;
   } catch (err) {
     console.error("Error loading user data:", err);
@@ -448,9 +542,11 @@ function startPomodoroTimer() {
           oscillator.start(audioContext.currentTime);
           oscillator.stop(audioContext.currentTime + 0.5);
         } catch (e) {
-          // Fallback: browser notification
-          if (Notification.permission === 'granted') {
-            new Notification('Pomodoro Timer', { body: 'Time\'s up! Great work! 🎉' });
+          // Fallback: in-app toast or browser notification (if already granted)
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("Pomodoro Timer", { body: "Time's up! Great work! 🎉" });
+          } else {
+            showToast("Time's up! Great work!");
           }
         }
       }
@@ -519,11 +615,6 @@ function initPomodoroTimer() {
       }
     };
   }
-  
-  // Request notification permission
-  if ("Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
-  }
 }
 
 // ---------- Authentication UI ----------
@@ -590,13 +681,11 @@ async function handleLogin(email, password) {
     // Logins should not trigger onboarding wizard
     onboardingMode = null;
     shouldShowOnboarding = false;
+    localStorage.removeItem("planwise_should_show_onboarding");
+    localStorage.removeItem("planwise_onboarding_mode");
 
-    await loadUserData();
-    showView('dashboard');
-    // Initialize all dashboard features
-    initDashboard();
-    // Start periodic reflection checker
-    startReflectionChecker();
+    // Go to dedicated dashboard page
+    window.location.href = "dashboard.html";
     return true;
   } catch (err) {
     console.error("Login error:", err);
@@ -641,22 +730,14 @@ async function handleSignup(name, email, password) {
     currentUser = data.user;
     localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(data.user));
     
-    // New signups should see personalization only (no tasks/confirm steps)
+    // New signups should see personalization-only onboarding on the dashboard page.
     onboardingMode = "personalization-only";
     shouldShowOnboarding = true;
-    applyOnboardingModeUI();
+    localStorage.setItem("planwise_should_show_onboarding", "1");
+    localStorage.setItem("planwise_onboarding_mode", onboardingMode);
 
-    await loadUserData();
-    showView('dashboard');
-    // Initialize all dashboard features
-    initDashboard();
-    // Show personalization-only onboarding for new users (only during signup)
-    if (shouldShowOnboarding && !state.profile) {
-      setStep(1);
-      initOnboardingGoals();
-    } else {
-      startReflectionChecker();
-    }
+    // Go to dedicated dashboard page
+    window.location.href = "dashboard.html";
     return true;
   } catch (err) {
     console.error("Signup error:", err);
@@ -675,8 +756,115 @@ async function handleGoogleAuth() {
   alert("Google OAuth integration requires additional setup. Please use email/password for now.");
 }
 
+// Handle "Continue without login" for testing purposes
+function handleContinueWithoutLogin() {
+  // Create a guest session with local storage only (no server authentication)
+  const guestId = `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Set a fake token to indicate guest mode
+  localStorage.setItem(STORAGE_KEY, `guest_${guestId}`);
+  authToken = `guest_${guestId}`;
+  
+  // Create a guest user object
+  currentUser = {
+    id: guestId,
+    name: "Guest User",
+    email: "guest@test.local",
+    isGuest: true
+  };
+  localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(currentUser));
+  
+  // Initialize empty state for guest
+  state = {
+    profile: null,
+    tasks: [],
+    rankedTasks: [],
+    schedule: [],
+    fixedBlocks: [],
+    goals: [],
+    reflections: [],
+    blockingRules: [],
+    dailyHabits: [],
+    firstReflectionDueDate: null,
+  };
+  
+  // Don't trigger onboarding wizard for guest mode - just go to dashboard
+  onboardingMode = null;
+  shouldShowOnboarding = false;
+  localStorage.removeItem("planwise_should_show_onboarding");
+  localStorage.removeItem("planwise_onboarding_mode");
+
+  // Persist the initial guest state before navigating
+  // In guest mode, do NOT call server endpoints. Persist locally.
+  localStorage.setItem('planwise_guest_state', JSON.stringify(state));
+
+  // Go to dedicated dashboard page
+  window.location.href = "dashboard.html";
+}
+
+// Override saveUserData for guest mode to use localStorage only
+const originalSaveUserData = saveUserData;
+saveUserData = async function() {
+  const token = getAuthToken();
+  
+  // Check if in guest mode
+  if (token && token.startsWith('guest_')) {
+    // Save to localStorage only
+    localStorage.setItem('planwise_guest_state', JSON.stringify(state));
+    console.log("Guest state saved to localStorage");
+    return;
+  }
+  
+  // Otherwise, use the original server-based save
+  return originalSaveUserData();
+};
+
+// Override loadUserData for guest mode to use localStorage only
+const originalLoadUserData = loadUserData;
+loadUserData = async function() {
+  const token = getAuthToken();
+  
+  // Check if in guest mode
+  if (token && token.startsWith('guest_')) {
+    // Load from localStorage
+    const savedState = localStorage.getItem('planwise_guest_state');
+    if (savedState) {
+      try {
+        const parsed = JSON.parse(savedState);
+        state = {
+          profile: parsed.profile || null,
+          tasks: parsed.tasks || [],
+          rankedTasks: parsed.rankedTasks || [],
+          schedule: parsed.schedule || [],
+          fixedBlocks: parsed.fixedBlocks || [],
+          goals: parsed.goals || [],
+          reflections: parsed.reflections || [],
+          blockingRules: parsed.blockingRules || [],
+          dailyHabits: parsed.dailyHabits || [],
+          firstReflectionDueDate: parsed.firstReflectionDueDate || null,
+        };
+        console.log("Guest state loaded from localStorage");
+        
+        migrateProfileData();
+        migrateGoalsData();
+        ensureTaskIds();
+        return true;
+      } catch (err) {
+        console.error("Error loading guest state:", err);
+        return false;
+      }
+    }
+    return true; // Return true even if no saved state (new guest session)
+  }
+  
+  // Otherwise, use the original server-based load
+  return originalLoadUserData();
+};
+
 function handleLogout() {
-  if (confirm("Are you sure you want to logout?")) {
+  const token = getAuthToken();
+  const isGuest = Boolean(token && token.startsWith("guest_"));
+  if (isGuest || confirm("Are you sure you want to logout?")) {
     // Stop reflection checker
     stopReflectionChecker();
     setAuthToken(null);
@@ -691,7 +879,9 @@ function handleLogout() {
       blockingRules: [],
       dailyHabits: [],
     };
-    showView('landingPage');
+    localStorage.removeItem("planwise_should_show_onboarding");
+    localStorage.removeItem("planwise_onboarding_mode");
+    window.location.href = isGuest ? "index.html#auth" : "index.html";
   }
 }
 
@@ -731,6 +921,10 @@ function initAuth() {
   // Google auth buttons
   $("#googleLoginBtn")?.addEventListener("click", handleGoogleAuth);
   $("#googleSignupBtn")?.addEventListener("click", handleGoogleAuth);
+
+  // Continue without login buttons (both login and signup forms)
+  $("#continueWithoutLoginBtn")?.addEventListener("click", handleContinueWithoutLogin);
+  $("#continueWithoutSignupBtn")?.addEventListener("click", handleContinueWithoutLogin);
 
   // Logout button
   $("#logoutBtn")?.addEventListener("click", handleLogout);
@@ -935,27 +1129,275 @@ function initProfileEditForm() {
   });
 }
 
-function initSettings() {
-  // Load current user info
-  if (currentUser) {
+async function initSettings() {
+  // Load current user info from server if available
+  const token = getAuthToken();
+  if (token && !token.startsWith('guest_')) {
+    try {
+      const res = await fetch("/api/user/info", {
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const userInfo = await res.json();
+        $("#profileEditName").value = userInfo.name || "";
+        $("#profileEditEmail").value = userInfo.email || "";
+        if (userInfo.createdAt) {
+          const createdDate = new Date(userInfo.createdAt);
+          $("#profileCreatedAt").value = createdDate.toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric'
+          });
+        }
+        currentUser = { ...currentUser, ...userInfo };
+      }
+    } catch (err) {
+      console.error("Error fetching user info:", err);
+    }
+  } else if (currentUser) {
     $("#profileEditName").value = currentUser.name || "";
     $("#profileEditEmail").value = currentUser.email || "";
+    $("#profileCreatedAt").value = "Guest Account";
   }
 
   // Initialize profile edit form (only once)
   initProfileEditForm();
+  
+  // Initialize account settings (password change, delete account)
+  initAccountSettings();
 
   // Render goals hierarchy
   renderGoalsHierarchy();
 
-  // Render blocking rules
+  // Render blocking rules with focus mode panel
+  renderFocusModePanel();
   renderBlockingRules();
   
-  // Initialize blocking rules button (only once)
+  // Initialize blocking rules buttons
   initBlockingRulesButton();
 
   // Render reflections
   renderReflectionsList();
+  
+  // Initialize new reflection button
+  initNewReflectionButton();
+  
+  // Initialize edit learning preferences button
+  initEditLearningPrefsButton();
+}
+
+// Initialize account settings (password change, delete account)
+function initAccountSettings() {
+  // Password change form
+  const passwordForm = $("#passwordChangeForm");
+  if (passwordForm && !passwordForm.dataset.initialized) {
+    passwordForm.dataset.initialized = "true";
+    
+    passwordForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      
+      const currentPassword = $("#currentPassword").value;
+      const newPassword = $("#newPassword").value;
+      const confirmPassword = $("#confirmNewPassword").value;
+      
+      const statusEl = $("#passwordChangeStatus");
+      
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        statusEl.textContent = "Please fill in all fields";
+        statusEl.className = "save-status error";
+        return;
+      }
+      
+      if (newPassword !== confirmPassword) {
+        statusEl.textContent = "New passwords do not match";
+        statusEl.className = "save-status error";
+        return;
+      }
+      
+      if (newPassword.length < 8) {
+        statusEl.textContent = "New password must be at least 8 characters";
+        statusEl.className = "save-status error";
+        return;
+      }
+      
+      const changeBtn = $("#changePasswordBtn");
+      const originalText = changeBtn.textContent;
+      changeBtn.textContent = "Changing...";
+      changeBtn.disabled = true;
+      statusEl.textContent = "Updating password...";
+      statusEl.className = "save-status loading";
+      
+      try {
+        const res = await fetch("/api/user/password", {
+          method: "PUT",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ currentPassword, newPassword }),
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+          statusEl.textContent = "Password changed successfully! ✓";
+          statusEl.className = "save-status success";
+          passwordForm.reset();
+        } else {
+          statusEl.textContent = data.error || "Failed to change password";
+          statusEl.className = "save-status error";
+        }
+      } catch (err) {
+        statusEl.textContent = "Network error. Please try again.";
+        statusEl.className = "save-status error";
+      } finally {
+        changeBtn.textContent = originalText;
+        changeBtn.disabled = false;
+      }
+    });
+  }
+  
+  // Delete account button
+  const deleteBtn = $("#deleteAccountBtn");
+  if (deleteBtn && !deleteBtn.dataset.initialized) {
+    deleteBtn.dataset.initialized = "true";
+    
+    deleteBtn.addEventListener("click", async () => {
+      const confirmed = confirm(
+        "⚠️ DELETE ACCOUNT\n\n" +
+        "This action cannot be undone. All your data will be permanently deleted:\n\n" +
+        "• Your profile and preferences\n" +
+        "• All tasks and schedules\n" +
+        "• All goals and reflections\n" +
+        "• All blocking rules\n\n" +
+        "Are you absolutely sure you want to delete your account?"
+      );
+      
+      if (!confirmed) return;
+      
+      const doubleConfirmed = confirm(
+        "FINAL CONFIRMATION\n\n" +
+        "Type 'DELETE' in the next prompt to confirm account deletion."
+      );
+      
+      if (!doubleConfirmed) return;
+      
+      const userInput = prompt("Type DELETE to confirm:");
+      if (userInput !== "DELETE") {
+        alert("Account deletion cancelled.");
+        return;
+      }
+      
+      try {
+        const res = await fetch("/api/user/account", {
+          method: "DELETE",
+          headers: getAuthHeaders(),
+        });
+        
+        if (res.ok) {
+          alert("Your account has been deleted. Goodbye!");
+          setAuthToken(null);
+          window.location.href = "index.html";
+        } else {
+          const data = await res.json();
+          alert(data.error || "Failed to delete account. Please try again.");
+        }
+      } catch (err) {
+        alert("Network error. Please try again.");
+      }
+    });
+  }
+}
+
+// Render focus mode panel in settings
+function renderFocusModePanel() {
+  const container = $("#focusModePanel");
+  if (!container) return;
+  
+  // Check if focus mode is currently active
+  const focusData = localStorage.getItem("axis_focus_mode");
+  let isActive = false;
+  let remainingMinutes = 0;
+  
+  if (focusData) {
+    try {
+      const data = JSON.parse(focusData);
+      if (data.active && data.endTime > Date.now()) {
+        isActive = true;
+        remainingMinutes = Math.floor((data.endTime - Date.now()) / 60000);
+      }
+    } catch (e) {}
+  }
+  
+  if (isActive) {
+    container.innerHTML = `
+      <div class="focus-start-panel">
+        <h4 class="focus-start-title">🎯 Focus Mode Active</h4>
+        <p style="margin: 0 0 12px; color: #6b7280; font-size: 0.85rem;">
+          ${remainingMinutes} minutes remaining. All distracting sites are blocked.
+        </p>
+        <button class="btn btn-ghost" id="stopFocusModeBtn">
+          End Focus Mode Early
+        </button>
+      </div>
+    `;
+    
+    document.getElementById("stopFocusModeBtn")?.addEventListener("click", () => {
+      localStorage.removeItem("axis_focus_mode");
+      renderFocusModePanel();
+      showToast("Focus mode ended.");
+    });
+  } else {
+    container.innerHTML = `
+      <div class="focus-start-panel">
+        <h4 class="focus-start-title">🎯 Start Focus Mode</h4>
+        <p style="margin: 0 0 12px; color: #6b7280; font-size: 0.85rem;">
+          Block all distracting sites for a set duration.
+        </p>
+        <div class="focus-duration-buttons">
+          <button class="focus-duration-btn" data-duration="25">25 min</button>
+          <button class="focus-duration-btn" data-duration="45">45 min</button>
+          <button class="focus-duration-btn" data-duration="60">1 hour</button>
+          <button class="focus-duration-btn" data-duration="90">1.5 hours</button>
+        </div>
+      </div>
+    `;
+    
+    container.querySelectorAll(".focus-duration-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const duration = parseInt(btn.dataset.duration, 10);
+        const endTime = Date.now() + (duration * 60 * 1000);
+        localStorage.setItem("axis_focus_mode", JSON.stringify({
+          active: true,
+          endTime: endTime
+        }));
+        renderFocusModePanel();
+        showToast(`Focus mode started for ${duration} minutes!`);
+      });
+    });
+  }
+}
+
+// Initialize new reflection button
+function initNewReflectionButton() {
+  const btn = $("#newReflectionBtn");
+  if (btn && !btn.dataset.initialized) {
+    btn.dataset.initialized = "true";
+    btn.addEventListener("click", () => {
+      showReflectionPrompt("weekly");
+    });
+  }
+}
+
+// Initialize edit learning preferences button
+function initEditLearningPrefsButton() {
+  const btn = $("#editLearningPrefsBtn");
+  if (btn && !btn.dataset.initialized) {
+    btn.dataset.initialized = "true";
+    btn.addEventListener("click", () => {
+      // Close settings panel
+      $("#settingsPanel")?.classList.add("hidden");
+      // Open onboarding wizard at step 1
+      restoreProfileToForm();
+      onboardingMode = null;
+      setStep(1);
+    });
+  }
 }
 
 // ---------- Initialization ----------
@@ -972,40 +1414,258 @@ function initDashboard() {
   initGoals();
   initDailyHabits();
   initPomodoroTimer();
+  initEisenhowerMatrix();
+  initHabitNotifications();
+  initAnalytics();
+  initDataManagement();
   restoreFromState();
+}
+
+// ---------- Eisenhower Matrix ----------
+
+let matrixViewActive = false;
+
+function initEisenhowerMatrix() {
+  const toggleBtn = $("#toggleMatrixBtn");
+  if (!toggleBtn) return;
+  
+  // Remove existing listener by cloning
+  const newBtn = toggleBtn.cloneNode(true);
+  toggleBtn.parentNode?.replaceChild(newBtn, toggleBtn);
+  
+  newBtn.addEventListener("click", () => {
+    matrixViewActive = !matrixViewActive;
+    const taskList = $("#taskList");
+    const matrix = $("#eisenhowerMatrix");
+    
+    if (matrixViewActive) {
+      taskList?.classList.add("hidden");
+      matrix?.classList.remove("hidden");
+      newBtn.classList.add("active");
+      renderEisenhowerMatrix();
+    } else {
+      taskList?.classList.remove("hidden");
+      matrix?.classList.add("hidden");
+      newBtn.classList.remove("active");
+    }
+  });
+}
+
+function renderEisenhowerMatrix() {
+  const matrix = $("#eisenhowerMatrix");
+  if (!matrix) return;
+  
+  const priorities = [
+    "Urgent & Important",
+    "Important, Not Urgent",
+    "Urgent, Not Important",
+    "Not Urgent & Not Important"
+  ];
+  
+  priorities.forEach(priority => {
+    const quadrantTasks = matrix.querySelector(`.quadrant-tasks[data-priority="${priority}"]`);
+    if (!quadrantTasks) return;
+    
+    quadrantTasks.innerHTML = "";
+    
+    const tasksForQuadrant = (state.tasks || []).filter(t => t.task_priority === priority);
+    
+    if (tasksForQuadrant.length === 0) {
+      quadrantTasks.innerHTML = '<div class="quadrant-empty">No tasks</div>';
+      return;
+    }
+    
+    tasksForQuadrant.forEach(task => {
+      const taskItem = document.createElement("div");
+      taskItem.className = `quadrant-task-item${task.completed ? " completed" : ""}`;
+      taskItem.innerHTML = `
+        <div class="quadrant-task-checkbox${task.completed ? " checked" : ""}" data-id="${task.id}"></div>
+        <span class="quadrant-task-name" title="${task.task_name}">${task.task_name}</span>
+      `;
+      quadrantTasks.appendChild(taskItem);
+    });
+  });
+  
+  // Handle clicks for toggling completion and opening timer
+  matrix.onclick = (e) => {
+    const checkbox = e.target.closest(".quadrant-task-checkbox");
+    if (checkbox) {
+      const taskId = checkbox.dataset.id;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (task) {
+        task.completed = !task.completed;
+        saveUserData();
+        renderEisenhowerMatrix();
+        renderTasks();
+        renderTaskSummary();
+        regenerateScheduleAndRender();
+      }
+      return;
+    }
+    
+    const taskItem = e.target.closest(".quadrant-task-item");
+    if (taskItem) {
+      const checkbox = taskItem.querySelector(".quadrant-task-checkbox");
+      if (checkbox) {
+        const taskId = checkbox.dataset.id;
+        openPomodoroTimer(taskId);
+      }
+    }
+  };
+}
+
+// ---------- Habit Notifications (In-page) ----------
+
+let habitNotificationTimeout = null;
+let lastShownHabitId = null;
+
+function initHabitNotifications() {
+  // Check for due habits every minute
+  setInterval(checkHabitsDue, 60000);
+  // Also check on init after a short delay
+  setTimeout(checkHabitsDue, 5000);
+}
+
+function checkHabitsDue() {
+  if (!state.dailyHabits || state.dailyHabits.length === 0) return;
+  
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  
+  // Find a habit that's due now (within 5 minutes window)
+  const dueHabit = state.dailyHabits.find(habit => {
+    const habitMinutes = parseTimeToMinutes(habit.time);
+    if (habitMinutes === null) return false;
+    
+    // Check if we're within a 5 minute window of the habit time
+    const diff = Math.abs(currentMinutes - habitMinutes);
+    return diff <= 5 && habit.id !== lastShownHabitId;
+  });
+  
+  if (dueHabit) {
+    showHabitNotification(dueHabit);
+    lastShownHabitId = dueHabit.id;
+  }
+}
+
+function showHabitNotification(habit) {
+  // Remove any existing notification
+  const existing = document.querySelector(".habit-notification");
+  if (existing) existing.remove();
+  
+  // Create in-page notification
+  const notification = document.createElement("div");
+  notification.className = "habit-notification";
+  notification.innerHTML = `
+    <div class="habit-notification-header">
+      <span class="habit-notification-title">
+        <span class="habit-notification-title-icon">⏰</span>
+        Habit Reminder
+      </span>
+      <button class="habit-notification-close" title="Dismiss">×</button>
+    </div>
+    <div class="habit-notification-content">
+      It's time for: <span class="habit-notification-habit">${habit.name}</span>
+      <br>
+      <small>Scheduled for ${habit.time}</small>
+    </div>
+    <div class="habit-notification-actions">
+      <button class="btn btn-primary" data-action="done">Done ✓</button>
+      <button class="btn btn-ghost" data-action="snooze">Remind in 10 min</button>
+    </div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Handle actions
+  notification.onclick = (e) => {
+    const closeBtn = e.target.closest(".habit-notification-close");
+    if (closeBtn) {
+      notification.remove();
+      return;
+    }
+    
+    const actionBtn = e.target.closest("[data-action]");
+    if (actionBtn) {
+      const action = actionBtn.dataset.action;
+      
+      if (action === "done") {
+        showToast(`${habit.name} completed! 🎉`);
+        notification.remove();
+      } else if (action === "snooze") {
+        showToast("Reminder snoozed for 10 minutes");
+        notification.remove();
+        // Set a timeout to show notification again in 10 minutes
+        setTimeout(() => {
+          lastShownHabitId = null; // Reset so it can be shown again
+          showHabitNotification(habit);
+        }, 10 * 60 * 1000);
+      }
+    }
+  };
+  
+  // Auto-dismiss after 2 minutes
+  if (habitNotificationTimeout) clearTimeout(habitNotificationTimeout);
+  habitNotificationTimeout = setTimeout(() => {
+    notification.remove();
+  }, 120000);
 }
 
 function initLandingPage() {
   // Landing page button handlers
+  // "Get Started" buttons go to signup tab
   $('#landingGetStartedBtn').addEventListener('click', () => {
     showView('authScreen');
-    // Switch to signup tab
     $('.auth-tab[data-tab="signup"]').click();
   });
   
+  // "Log In" button goes to login tab
   $('#landingLoginBtn').addEventListener('click', () => {
     showView('authScreen');
-    // Ensure login tab is active
     $('.auth-tab[data-tab="login"]').click();
   });
   
+  // Hero "Get Started" goes to signup
   $('#heroGetStartedBtn').addEventListener('click', () => {
     showView('authScreen');
     $('.auth-tab[data-tab="signup"]').click();
   });
   
+  // CTA "Try Axis Now" goes to signup
   $('#ctaGetStartedBtn').addEventListener('click', () => {
     showView('authScreen');
     $('.auth-tab[data-tab="signup"]').click();
   });
+  
+  // Back to home button on auth screen
+  $('#backToHomeBtn')?.addEventListener('click', () => {
+    showView('landingPage');
+  });
+  
+  // Switch links between login and signup forms
+  $('#switchToSignupLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    $('.auth-tab[data-tab="signup"]').click();
+  });
+  
+  $('#switchToLoginLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    $('.auth-tab[data-tab="login"]').click();
+  });
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // Always show landing page first
-  showView('landingPage');
+  const isIndexPage = Boolean(document.getElementById("landingPage"));
+  if (!isIndexPage) return;
 
   initAuth();
   initLandingPage();
+
+  const openAuth = window.location.hash === "#auth";
+  showView(openAuth ? "authScreen" : "landingPage");
+  if (openAuth) {
+    $('.auth-tab[data-tab="login"]')?.click();
+  }
 });
 
 function initWeeklyScheduleInputs() {
@@ -1439,10 +2099,7 @@ function initTaskForm() {
       $("#task_priority_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
       $("#planTasksBtn").disabled = state.tasks.length === 0;
       
-      // Auto-generate schedule after task change
-      if (state.tasks.length > 0 && state.profile) {
-        generateSchedule();
-      }
+      regenerateScheduleAndRender();
     });
   }
 
@@ -1465,20 +2122,11 @@ function initTaskForm() {
 }
 
 function initTaskEditorModal() {
-  // Initialize deadline time options for modal
   const modalDeadlineTime = $("#taskEditor_deadline_time");
   if (modalDeadlineTime) {
-    modalDeadlineTime.innerHTML = "";
-    for (let h = 0; h < 24; h++) {
-      for (let m = 0; m < 60; m += 15) {
-        const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-        const opt = document.createElement("option");
-        opt.value = value;
-        opt.textContent = value;
-        modalDeadlineTime.appendChild(opt);
-      }
+    if (!modalDeadlineTime.value) {
+      modalDeadlineTime.value = "23:59";
     }
-    modalDeadlineTime.value = "23:59";
   }
 
   // Add Task button handler
@@ -1513,37 +2161,74 @@ function initTaskEditorModal() {
     overlay.addEventListener("click", closeTaskEditor);
   }
 
-  // Form submission handler and priority button delegation
+  // Form submission handler and urgency/importance button delegation
   const taskEditorForm = $("#taskEditorForm");
   if (taskEditorForm) {
     const newForm = taskEditorForm.cloneNode(true);
     taskEditorForm.parentNode?.replaceChild(newForm, taskEditorForm);
     
-    // Use event delegation for priority buttons (works even after form is cloned)
+    // Use event delegation for urgency/importance buttons (works even after form is cloned)
     newForm.addEventListener("click", (e) => {
-      // Check if clicked element is a priority button
-      const priorityBtn = e.target.closest("#taskEditor_priority_group button");
-      if (priorityBtn) {
+      const urgentBtn = e.target.closest("#taskEditor_urgent_group button");
+      if (urgentBtn) {
         e.preventDefault();
-        const val = priorityBtn.dataset.value;
-        const hiddenInput = $("#taskEditor_priority");
-        if (hiddenInput) {
-          hiddenInput.value = val;
-        }
-        // Update button selected states
-        const priorityGroup = $("#taskEditor_priority_group");
-        if (priorityGroup) {
-          priorityGroup
-            .querySelectorAll("button")
-            .forEach((btn) => btn.classList.toggle("selected", btn === priorityBtn));
-        }
+        const val = urgentBtn.dataset.value;
+        const hiddenInput = $("#taskEditor_urgent");
+        if (hiddenInput) hiddenInput.value = val;
+        $("#taskEditor_urgent_group")
+          ?.querySelectorAll("button")
+          .forEach((btn) => btn.classList.toggle("selected", btn === urgentBtn));
+        updateTaskEditorPriorityFromUrgencyImportance();
+        return;
+      }
+
+      const importantBtn = e.target.closest("#taskEditor_important_group button");
+      if (importantBtn) {
+        e.preventDefault();
+        const val = importantBtn.dataset.value;
+        const hiddenInput = $("#taskEditor_important");
+        if (hiddenInput) hiddenInput.value = val;
+        $("#taskEditor_important_group")
+          ?.querySelectorAll("button")
+          .forEach((btn) => btn.classList.toggle("selected", btn === importantBtn));
+        updateTaskEditorPriorityFromUrgencyImportance();
       }
     });
     
-    newForm.addEventListener("submit", (e) => {
+    newForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const task = readTaskFromEditorForm();
       if (!task) return;
+
+      const isEditing = Boolean(editingTaskId);
+      const submitBtn = newForm.querySelector('button[type="submit"]');
+      const originalLabel = submitBtn?.textContent;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = isEditing ? "Saving..." : "Adding...";
+      }
+
+      try {
+        const urgentHint = $("#taskEditor_urgent")?.value;
+        const importantHint = $("#taskEditor_important")?.value;
+        const aiPriority = await aiDetermineTaskPriority({
+          description: task.task_name,
+          category: task.task_category,
+          deadlineDate: task.task_deadline,
+          deadlineTime: task.task_deadline_time,
+          durationHours: task.task_duration_hours,
+          urgentHint,
+          importantHint,
+        });
+        if (aiPriority) {
+          task.task_priority = aiPriority;
+        }
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = originalLabel || (isEditing ? "Save Changes" : "Add Task");
+        }
+      }
 
       if (editingTaskId) {
         // Update existing task
@@ -1566,20 +2251,8 @@ function initTaskEditorModal() {
       renderTasks();
       renderTaskSummary();
       closeTaskEditor();
-      
-      // Auto-generate schedule after task change
-      if (state.tasks.length > 0 && state.profile) {
-        generateSchedule();
-      } else {
-        // Clear schedule if no tasks
-        state.schedule = [];
-        renderSchedule();
-      }
-      
-      // Auto-generate schedule after task change
-      if (state.tasks.length > 0 && state.profile) {
-        generateSchedule();
-      }
+
+      regenerateScheduleAndRender();
     });
   }
 }
@@ -1605,11 +2278,7 @@ function openTaskEditor(taskId = null) {
     $("#taskEditor_priority").value = task.task_priority || "";
     $("#taskEditor_category").value = task.task_category || "study";
 
-    // Highlight priority button
-    const priorityGroup = $("#taskEditor_priority_group");
-    priorityGroup
-      ?.querySelectorAll("button")
-      .forEach((btn) => btn.classList.toggle("selected", btn.dataset.value === task.task_priority));
+    applyTaskEditorUrgencyImportanceFromPriority(task.task_priority);
 
     if (title) title.textContent = "Edit Task";
     const submitBtn = form.querySelector("button[type=submit]");
@@ -1617,9 +2286,9 @@ function openTaskEditor(taskId = null) {
   } else {
     // Adding new task
     form.reset();
+    clearTaskEditorUrgencyImportance();
     $("#taskEditor_priority").value = "";
     $("#taskEditor_deadline_time").value = "23:59";
-    $("#taskEditor_priority_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
 
     if (title) title.textContent = "Add Task";
     const submitBtn = form.querySelector("button[type=submit]");
@@ -1637,17 +2306,150 @@ function closeTaskEditor() {
   editingTaskId = null;
 }
 
+function priorityFromUrgencyImportance(urgent, important) {
+  const isUrgent = urgent === "yes";
+  const isImportant = important === "yes";
+  if (isUrgent && isImportant) return "Urgent & Important";
+  if (isUrgent && !isImportant) return "Urgent, Not Important";
+  if (!isUrgent && isImportant) return "Important, Not Urgent";
+  return "Not Urgent & Not Important";
+}
+
+function updateTaskEditorPriorityFromUrgencyImportance() {
+  const urgent = $("#taskEditor_urgent")?.value;
+  const important = $("#taskEditor_important")?.value;
+  const priorityInput = $("#taskEditor_priority");
+  if (!priorityInput) return;
+
+  if ((urgent !== "yes" && urgent !== "no") || (important !== "yes" && important !== "no")) {
+    priorityInput.value = "";
+    return;
+  }
+
+  priorityInput.value = priorityFromUrgencyImportance(urgent, important);
+}
+
+function clearTaskEditorUrgencyImportance() {
+  const urgentInput = $("#taskEditor_urgent");
+  const importantInput = $("#taskEditor_important");
+  if (urgentInput) urgentInput.value = "";
+  if (importantInput) importantInput.value = "";
+
+  $("#taskEditor_urgent_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
+  $("#taskEditor_important_group")?.querySelectorAll("button").forEach((btn) => btn.classList.remove("selected"));
+  updateTaskEditorPriorityFromUrgencyImportance();
+}
+
+function applyTaskEditorUrgencyImportanceFromPriority(priority) {
+  let urgent = "";
+  let important = "";
+  switch (priority) {
+    case "Urgent & Important":
+      urgent = "yes";
+      important = "yes";
+      break;
+    case "Urgent, Not Important":
+      urgent = "yes";
+      important = "no";
+      break;
+    case "Important, Not Urgent":
+      urgent = "no";
+      important = "yes";
+      break;
+    case "Not Urgent & Not Important":
+      urgent = "no";
+      important = "no";
+      break;
+    default:
+      clearTaskEditorUrgencyImportance();
+      return;
+  }
+
+  const urgentInput = $("#taskEditor_urgent");
+  const importantInput = $("#taskEditor_important");
+  if (urgentInput) urgentInput.value = urgent;
+  if (importantInput) importantInput.value = important;
+
+  $("#taskEditor_urgent_group")
+    ?.querySelectorAll("button")
+    .forEach((btn) => btn.classList.toggle("selected", btn.dataset.value === urgent));
+  $("#taskEditor_important_group")
+    ?.querySelectorAll("button")
+    .forEach((btn) => btn.classList.toggle("selected", btn.dataset.value === important));
+
+  updateTaskEditorPriorityFromUrgencyImportance();
+}
+
+async function aiDetermineTaskPriority({
+  description,
+  category,
+  deadlineDate,
+  deadlineTime,
+  durationHours,
+  urgentHint,
+  importantHint,
+}) {
+  try {
+    const res = await fetch("/api/ai/task-priority", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description,
+        category,
+        deadlineDate,
+        deadlineTime,
+        durationHours,
+        urgentHint,
+        importantHint,
+      }),
+    });
+
+    if (!res.ok) return "";
+    const data = await res.json();
+
+    const allowed = new Set([
+      "Urgent & Important",
+      "Urgent, Not Important",
+      "Important, Not Urgent",
+      "Not Urgent & Not Important",
+    ]);
+    return allowed.has(data.task_priority) ? data.task_priority : "";
+  } catch (err) {
+    console.error("aiDetermineTaskPriority error:", err);
+    return "";
+  }
+}
+
 function readTaskFromEditorForm() {
   const name = $("#taskEditor_name")?.value.trim();
-  const priority = $("#taskEditor_priority")?.value;
   const category = $("#taskEditor_category")?.value;
   const deadlineDate = $("#taskEditor_deadline")?.value;
-  const deadlineTime = $("#taskEditor_deadline_time")?.value || "23:59";
+  const deadlineTimeRaw = $("#taskEditor_deadline_time")?.value?.trim() || "23:59";
+  const deadlineTimeMinutes = parseTimeToMinutes(deadlineTimeRaw);
   const durationHours = parseFloat($("#taskEditor_duration")?.value || "0");
   const computer_required = $("#taskEditor_computer_required")?.checked;
 
-  if (!name || !priority || !category || !deadlineDate || !durationHours) {
-    alert("Please fill in task name, priority, category, deadline, and duration.");
+  const urgent = $("#taskEditor_urgent")?.value;
+  const important = $("#taskEditor_important")?.value;
+  updateTaskEditorPriorityFromUrgencyImportance();
+  const priority = $("#taskEditor_priority")?.value;
+
+  if (deadlineTimeMinutes === null) {
+    alert("Please enter a valid deadline time (HH:MM), e.g., 23:59 or 14:30.");
+    return null;
+  }
+  const deadlineTime = formatMinutesToTime(deadlineTimeMinutes);
+
+  if (!name || !category || !deadlineDate || !durationHours) {
+    alert("Please fill in task description, category, deadline, and duration.");
+    return null;
+  }
+  if ((urgent !== "yes" && urgent !== "no") || (important !== "yes" && important !== "no")) {
+    alert("Please answer the urgent and important questions.");
+    return null;
+  }
+  if (!priority) {
+    alert("Please answer the urgent and important questions.");
     return null;
   }
 
@@ -1692,31 +2494,83 @@ function readTaskFromForm() {
 
 function initGoals() {
   // Goals are now managed in Settings, but allow quick add from dashboard
+  initAddGoalModal();
+
   const addGoalBtn = $("#addGoalBtn");
   if (addGoalBtn) {
     const newBtn = addGoalBtn.cloneNode(true);
     addGoalBtn.parentNode?.replaceChild(newBtn, addGoalBtn);
-    newBtn.addEventListener("click", async () => {
-      const levelInput = prompt(
-        'Goal level? Choose: lifetime, yearly, monthly, weekly, daily.\nLeave blank for "lifetime".',
-      );
-      const normalized =
-        (levelInput || "lifetime").trim().toLowerCase() || "lifetime";
-      const allowed = ["lifetime", "yearly", "monthly", "weekly", "daily"];
-      const finalLevel = allowed.includes(normalized) ? normalized : "lifetime";
-
-      const placeholder = await getGoalNameSuggestion(finalLevel);
-      const name = prompt(
-        `Add a ${finalLevel} goal:`,
-        placeholder || "",
-      );
-      if (!name || !name.trim()) return;
-      addGoal(name.trim(), finalLevel);
+    newBtn.addEventListener("click", () => {
+      openAddGoalModal();
     });
   }
 
   renderGoals();
   updateCategoryDropdown();
+}
+
+function openAddGoalModal() {
+  const modal = $("#addGoalModal");
+  if (!modal) return;
+
+  const levelSelect = $("#goalLevelSelect");
+  if (levelSelect && !levelSelect.value) {
+    levelSelect.value = "lifetime";
+  }
+
+  const nameInput = $("#goalNameInput");
+  if (nameInput) {
+    nameInput.value = "";
+    nameInput.focus();
+  }
+
+  modal.classList.remove("hidden");
+  updateAddGoalNameSuggestion();
+}
+
+function closeAddGoalModal() {
+  $("#addGoalModal")?.classList.add("hidden");
+}
+
+async function updateAddGoalNameSuggestion() {
+  const nameInput = $("#goalNameInput");
+  const levelSelect = $("#goalLevelSelect");
+  if (!nameInput || !levelSelect) return;
+
+  const level = (levelSelect.value || "lifetime").trim().toLowerCase() || "lifetime";
+  const suggestion = await getGoalNameSuggestion(level);
+  if (suggestion && !nameInput.value) {
+    nameInput.placeholder = suggestion;
+  }
+}
+
+function initAddGoalModal() {
+  const modal = $("#addGoalModal");
+  if (!modal || modal.dataset.initialized) return;
+  modal.dataset.initialized = "true";
+
+  const overlay = modal.querySelector(".modal-overlay");
+  overlay?.addEventListener("click", closeAddGoalModal);
+
+  $("#closeAddGoalBtn")?.addEventListener("click", closeAddGoalModal);
+  $("#cancelAddGoalBtn")?.addEventListener("click", closeAddGoalModal);
+
+  $("#goalLevelSelect")?.addEventListener("change", () => {
+    const nameInput = $("#goalNameInput");
+    if (nameInput) nameInput.placeholder = "e.g., Get into Stanford";
+    updateAddGoalNameSuggestion();
+  });
+
+  $("#addGoalForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+
+    const name = $("#goalNameInput")?.value?.trim() || "";
+    const level = ($("#goalLevelSelect")?.value || "lifetime").trim().toLowerCase() || "lifetime";
+    if (!name) return;
+
+    addGoal(name, level);
+    closeAddGoalModal();
+  });
 }
 
 function addGoal(name, level = "lifetime") {
@@ -2748,9 +3602,7 @@ function saveGoalCanvas() {
   syncDailyGoalsToTasks();
   
   // Auto-render calendar if we have tasks
-  if (state.tasks && state.tasks.length > 0 && state.profile) {
-    generateSchedule();
-  }
+  regenerateScheduleAndRender();
 }
 
 // Sync daily goals to tasks
@@ -2803,12 +3655,13 @@ function syncDailyGoalsToTasks() {
     if (!existingGoalTaskIds.includes(goal.id)) {
       const task = {
         id: `task_goal_${goal.id}`,
-        name: goal.name,
-        description: `Daily goal: ${goal.name}`,
-        priority: "important-not-urgent",
-        category: goal.name.toLowerCase().replace(/\s+/g, "-"),
-        estimatedHours: 1, // Default 1 hour for daily goals
-        deadline: null,
+        task_name: goal.name,
+        task_priority: "Important, Not Urgent",
+        task_category: goal.name.toLowerCase().replace(/\s+/g, "-"),
+        // Daily goals should be actionable today, so set a default deadline.
+        task_deadline: todayLocalISODate(),
+        task_deadline_time: "23:59",
+        task_duration_hours: 1, // Default 1 hour for daily goals
         completed: false,
         fromDailyGoal: true,
         goalId: goal.id
@@ -2819,14 +3672,16 @@ function syncDailyGoalsToTasks() {
     } else {
       // Update existing task if goal name changed
       const existingTask = state.tasks.find(t => t.goalId === goal.id);
-      if (existingTask && existingTask.name !== goal.name) {
-        existingTask.name = goal.name;
-        existingTask.description = `Daily goal: ${goal.name}`;
-        existingTask.category = goal.name.toLowerCase().replace(/\s+/g, "-");
+      if (existingTask && existingTask.task_name !== goal.name) {
+        existingTask.task_name = goal.name;
+        existingTask.task_category = goal.name.toLowerCase().replace(/\s+/g, "-");
         console.log("Updated task from daily goal:", existingTask);
       }
     }
   });
+
+  // Ensure overall task list stays on the canonical schema
+  normalizeAllTasksInState();
   
   // Remove tasks for goals that no longer exist
   const dailyGoalIds = new Set(allDailyGoals.map(g => g.id));
@@ -2857,16 +3712,9 @@ function manualSyncCalendar() {
   // First sync daily goals to tasks
   syncDailyGoalsToTasks();
   
-  // Then regenerate schedule if we have tasks and profile
-  if (state.tasks && state.tasks.length > 0 && state.profile) {
-    console.log("Regenerating schedule with", state.tasks.length, "tasks");
-    generateSchedule();
-  } else {
-    console.log("No tasks or profile available for schedule generation");
-    // Clear schedule if no tasks
-    state.schedule = [];
-    renderSchedule();
-  }
+  // Then regenerate schedule
+  console.log("Regenerating schedule with", (state.tasks || []).length, "tasks");
+  regenerateScheduleAndRender();
   
   // Show feedback
   const syncBtn = $("#syncCalendarBtn");
@@ -3042,16 +3890,23 @@ function deleteTask(taskId) {
   renderRankedPreview();
   
   // Auto-regenerate schedule after task deletion
-  if (state.tasks.length > 0 && state.profile) {
-    generateSchedule();
-  } else {
-    // Clear schedule if no tasks
-    state.schedule = [];
-    renderSchedule();
-  }
+  regenerateScheduleAndRender();
   
   // Update plan button state
   $("#planTasksBtn").disabled = state.tasks.length === 0;
+}
+
+function regenerateScheduleAndRender() {
+  if (!state.profile) {
+    state.schedule = [];
+    state.fixedBlocks = [];
+    renderSchedule();
+    return;
+  }
+
+  rankTasks();
+  generateSchedule();
+  renderSchedule();
 }
 
 function renderTasks() {
@@ -3132,6 +3987,7 @@ function renderTasks() {
       if (task) {
         task.completed = !task.completed;
         saveUserData();
+        regenerateScheduleAndRender();
         // Re-render so completed items move down & get styling
         renderTasks();
         renderTaskSummary();
@@ -3213,7 +4069,7 @@ function startEditTask(taskId) {
 }
 
 function rankTasks() {
-  const tasks = [...state.tasks];
+  const tasks = [...(state.tasks || [])].filter((t) => !t.completed);
   tasks.sort((a, b) => {
     const pa = PRIORITY_WEIGHTS[a.task_priority] ?? 99;
     const pb = PRIORITY_WEIGHTS[b.task_priority] ?? 99;
@@ -4954,6 +5810,513 @@ async function analyzeReflection(content, type) {
   }
 }
 
+// ---------- Task Analytics ----------
+
+function initAnalytics() {
+  const toggleBtn = $("#toggleAnalyticsBtn");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      const expanded = $("#analyticsExpanded");
+      if (expanded) {
+        const isHidden = expanded.classList.contains("hidden");
+        expanded.classList.toggle("hidden", !isHidden);
+        toggleBtn.textContent = isHidden ? "Collapse" : "Expand";
+      }
+    });
+  }
+  renderAnalytics();
+}
+
+function renderAnalytics() {
+  const tasks = state.tasks || [];
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter(t => t.completed).length;
+  const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  
+  // Update summary stats
+  const statTotal = $("#statTotalTasks");
+  const statCompleted = $("#statCompletedTasks");
+  const statRate = $("#statCompletionRate");
+  
+  if (statTotal) statTotal.textContent = totalTasks;
+  if (statCompleted) statCompleted.textContent = completedTasks;
+  if (statRate) statRate.textContent = `${completionRate}%`;
+  
+  // Priority distribution
+  renderPriorityDistribution(tasks);
+  
+  // Category breakdown
+  renderCategoryBreakdown(tasks);
+  
+  // Weekly progress
+  renderWeeklyProgress(tasks);
+  
+  // Productivity score
+  renderProductivityScore(tasks, completionRate);
+}
+
+function renderPriorityDistribution(tasks) {
+  const container = $("#priorityDistribution");
+  if (!container) return;
+  
+  const priorities = [
+    { key: "Urgent & Important", color: "#ef4444" },
+    { key: "Important, Not Urgent", color: "#3b82f6" },
+    { key: "Urgent, Not Important", color: "#f59e0b" },
+    { key: "Not Urgent & Not Important", color: "#6b7280" },
+  ];
+  
+  const total = tasks.length || 1;
+  
+  container.innerHTML = priorities.map(p => {
+    const count = tasks.filter(t => t.task_priority === p.key).length;
+    const percent = Math.round((count / total) * 100);
+    return `
+      <div class="distribution-bar">
+        <span class="distribution-bar-label">${p.key.split(",")[0]}</span>
+        <div class="distribution-bar-track">
+          <div class="distribution-bar-fill" style="width: ${percent}%; background: ${p.color};"></div>
+        </div>
+        <span class="distribution-bar-value">${count}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderCategoryBreakdown(tasks) {
+  const container = $("#categoryBreakdown");
+  if (!container) return;
+  
+  const categories = {};
+  tasks.forEach(t => {
+    const cat = t.task_category || "study";
+    categories[cat] = (categories[cat] || 0) + 1;
+  });
+  
+  const total = tasks.length || 1;
+  const colors = {
+    study: "#c8103c",
+    project: "#a10d32",
+    chores: "#c8103c",
+    personal: "#9ca3af",
+    social: "#6b7280",
+  };
+  
+  container.innerHTML = Object.entries(categories).map(([cat, count]) => {
+    const percent = Math.round((count / total) * 100);
+    const color = colors[cat] || "#9ca3af";
+    return `
+      <div class="distribution-bar">
+        <span class="distribution-bar-label">${cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+        <div class="distribution-bar-track">
+          <div class="distribution-bar-fill" style="width: ${percent}%; background: ${color};"></div>
+        </div>
+        <span class="distribution-bar-value">${count}</span>
+      </div>
+    `;
+  }).join("") || '<p style="font-size: 0.75rem; color: var(--text-muted);">No tasks yet</p>';
+}
+
+function renderWeeklyProgress(tasks) {
+  const container = $("#weeklyProgress");
+  if (!container) return;
+  
+  const today = new Date();
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const days = [];
+  
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    days.push(d);
+  }
+  
+  const maxCompleted = Math.max(1, ...days.map(d => {
+    const dateStr = d.toISOString().slice(0, 10);
+    return tasks.filter(t => t.completed && t.task_deadline === dateStr).length;
+  }));
+  
+  container.innerHTML = days.map(d => {
+    const dateStr = d.toISOString().slice(0, 10);
+    const completed = tasks.filter(t => t.completed && t.task_deadline === dateStr).length;
+    const percent = (completed / maxCompleted) * 100;
+    const dayName = dayNames[d.getDay()];
+    const isToday = d.toDateString() === today.toDateString();
+    
+    return `
+      <div class="weekly-progress-day">
+        <div class="weekly-progress-bar">
+          <div class="weekly-progress-fill" style="height: ${percent}%;"></div>
+        </div>
+        <span class="weekly-progress-label" style="${isToday ? 'font-weight: 700;' : ''}">${dayName}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderProductivityScore(tasks, completionRate) {
+  const scoreRingFill = $("#scoreRingFill");
+  const scoreValue = $("#scoreValue");
+  const scoreLabel = $("#scoreLabel");
+  
+  if (!scoreRingFill || !scoreValue || !scoreLabel) return;
+  
+  // Calculate productivity score based on:
+  // - Completion rate (40%)
+  // - Priority balance (30%) - not all tasks are urgent/important
+  // - Task count (30%) - more tasks managed = higher score
+  
+  let score = 0;
+  
+  // Completion rate component
+  score += completionRate * 0.4;
+  
+  // Priority balance
+  const urgentImportant = tasks.filter(t => t.task_priority === "Urgent & Important").length;
+  const total = tasks.length || 1;
+  const urgentRatio = urgentImportant / total;
+  const balanceScore = urgentRatio < 0.5 ? 100 : (1 - urgentRatio) * 200;
+  score += balanceScore * 0.3;
+  
+  // Task count
+  const taskCountScore = Math.min(100, tasks.length * 10);
+  score += taskCountScore * 0.3;
+  
+  score = Math.round(Math.min(100, Math.max(0, score)));
+  
+  scoreRingFill.setAttribute("stroke-dasharray", `${score}, 100`);
+  scoreValue.textContent = score;
+  
+  if (score >= 80) scoreLabel.textContent = "Excellent! 🌟";
+  else if (score >= 60) scoreLabel.textContent = "Great Progress!";
+  else if (score >= 40) scoreLabel.textContent = "Keep Going!";
+  else if (score >= 20) scoreLabel.textContent = "Building Momentum";
+  else scoreLabel.textContent = "Getting Started";
+}
+
+// ---------- Import/Export Functions ----------
+
+function initDataManagement() {
+  // Export all data
+  const exportAllBtn = $("#exportAllDataBtn");
+  if (exportAllBtn) {
+    exportAllBtn.addEventListener("click", exportAllData);
+  }
+  
+  // Export tasks CSV
+  const exportCSVBtn = $("#exportTasksCSVBtn");
+  if (exportCSVBtn) {
+    exportCSVBtn.addEventListener("click", exportTasksCSV);
+  }
+  
+  // Import data
+  const importBtn = $("#importDataBtn");
+  const importFile = $("#importDataFile");
+  if (importBtn && importFile) {
+    importBtn.addEventListener("click", () => importFile.click());
+    importFile.addEventListener("change", handleImportData);
+  }
+  
+  // Clear data buttons
+  const clearCompletedBtn = $("#clearCompletedTasksBtn");
+  if (clearCompletedBtn) {
+    clearCompletedBtn.addEventListener("click", () => clearData("completed"));
+  }
+  
+  const clearAllTasksBtn = $("#clearAllTasksBtn");
+  if (clearAllTasksBtn) {
+    clearAllTasksBtn.addEventListener("click", () => clearData("tasks"));
+  }
+  
+  const clearScheduleBtn = $("#clearScheduleBtn");
+  if (clearScheduleBtn) {
+    clearScheduleBtn.addEventListener("click", () => clearData("schedule"));
+  }
+  
+  // Add common blocking rules
+  const addCommonRulesBtn = $("#addCommonRulesBtn");
+  if (addCommonRulesBtn) {
+    addCommonRulesBtn.addEventListener("click", addCommonBlockingRules);
+  }
+  
+  updateDataSummary();
+}
+
+function exportAllData() {
+  const data = {
+    exportDate: new Date().toISOString(),
+    version: "1.0",
+    profile: state.profile,
+    tasks: state.tasks,
+    goals: state.goals,
+    dailyHabits: state.dailyHabits,
+    reflections: state.reflections,
+    blockingRules: state.blockingRules,
+    schedule: state.schedule,
+    fixedBlocks: state.fixedBlocks,
+  };
+  
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `axis-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  
+  showToast("Data exported successfully!");
+}
+
+function exportTasksCSV() {
+  const tasks = state.tasks || [];
+  if (tasks.length === 0) {
+    alert("No tasks to export.");
+    return;
+  }
+  
+  const headers = ["Name", "Priority", "Category", "Deadline", "Time", "Duration (hrs)", "Completed", "Recurring"];
+  const rows = tasks.map(t => [
+    `"${(t.task_name || "").replace(/"/g, '""')}"`,
+    t.task_priority || "",
+    t.task_category || "",
+    t.task_deadline || "",
+    t.task_deadline_time || "",
+    t.task_duration_hours || "",
+    t.completed ? "Yes" : "No",
+    t.recurrence || "None",
+  ]);
+  
+  const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `axis-tasks-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  
+  showToast("Tasks exported as CSV!");
+}
+
+async function handleImportData(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  const statusEl = $("#importStatus");
+  
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    
+    if (!data.version || !data.exportDate) {
+      throw new Error("Invalid backup file format");
+    }
+    
+    const confirmed = confirm(
+      `Import data from ${new Date(data.exportDate).toLocaleDateString()}?\n\n` +
+      `This will merge:\n` +
+      `• ${(data.tasks || []).length} tasks\n` +
+      `• ${(data.goals || []).length} goals\n` +
+      `• ${(data.dailyHabits || []).length} habits\n` +
+      `• ${(data.reflections || []).length} reflections\n\n` +
+      `Existing data will be preserved.`
+    );
+    
+    if (!confirmed) {
+      e.target.value = "";
+      return;
+    }
+    
+    // Merge data (avoid duplicates by ID)
+    if (data.tasks) {
+      const existingIds = new Set((state.tasks || []).map(t => t.id));
+      const newTasks = data.tasks.filter(t => !existingIds.has(t.id));
+      state.tasks = [...(state.tasks || []), ...newTasks];
+    }
+    
+    if (data.goals) {
+      const existingIds = new Set((state.goals || []).map(g => g.id));
+      const newGoals = data.goals.filter(g => !existingIds.has(g.id));
+      state.goals = [...(state.goals || []), ...newGoals];
+    }
+    
+    if (data.dailyHabits) {
+      const existingIds = new Set((state.dailyHabits || []).map(h => h.id));
+      const newHabits = data.dailyHabits.filter(h => !existingIds.has(h.id));
+      state.dailyHabits = [...(state.dailyHabits || []), ...newHabits];
+    }
+    
+    if (data.reflections) {
+      const existingIds = new Set((state.reflections || []).map(r => r.id));
+      const newReflections = data.reflections.filter(r => !existingIds.has(r.id));
+      state.reflections = [...(state.reflections || []), ...newReflections];
+    }
+    
+    if (data.blockingRules) {
+      const existingIds = new Set((state.blockingRules || []).map(r => r.id));
+      const newRules = data.blockingRules.filter(r => !existingIds.has(r.id));
+      state.blockingRules = [...(state.blockingRules || []), ...newRules];
+    }
+    
+    await saveUserData();
+    
+    if (statusEl) {
+      statusEl.textContent = "✓ Data imported successfully!";
+      statusEl.className = "import-status success";
+    }
+    
+    // Refresh UI
+    renderTasks();
+    renderGoals();
+    renderDailyHabits();
+    renderAnalytics();
+    updateDataSummary();
+    regenerateScheduleAndRender();
+    
+    showToast("Data imported successfully!");
+  } catch (err) {
+    console.error("Import error:", err);
+    if (statusEl) {
+      statusEl.textContent = `✗ Import failed: ${err.message}`;
+      statusEl.className = "import-status error";
+    }
+  }
+  
+  e.target.value = "";
+}
+
+function clearData(type) {
+  let message = "";
+  switch (type) {
+    case "completed":
+      message = "Clear all completed tasks? This cannot be undone.";
+      break;
+    case "tasks":
+      message = "Clear ALL tasks? This cannot be undone.";
+      break;
+    case "schedule":
+      message = "Clear the current schedule? Tasks will remain but need to be rescheduled.";
+      break;
+  }
+  
+  if (!confirm(message)) return;
+  
+  switch (type) {
+    case "completed":
+      state.tasks = (state.tasks || []).filter(t => !t.completed);
+      break;
+    case "tasks":
+      state.tasks = [];
+      state.rankedTasks = [];
+      state.schedule = [];
+      break;
+    case "schedule":
+      state.schedule = [];
+      state.fixedBlocks = [];
+      break;
+  }
+  
+  saveUserData();
+  renderTasks();
+  renderAnalytics();
+  renderSchedule();
+  updateDataSummary();
+  showToast("Data cleared.");
+}
+
+function updateDataSummary() {
+  const summaryTotal = $("#summaryTotalTasks");
+  const summaryCompleted = $("#summaryCompletedTasks");
+  const summaryGoals = $("#summaryGoals");
+  const summaryHabits = $("#summaryHabits");
+  const summaryReflections = $("#summaryReflections");
+  const summaryBlockingRules = $("#summaryBlockingRules");
+  
+  if (summaryTotal) summaryTotal.textContent = (state.tasks || []).length;
+  if (summaryCompleted) summaryCompleted.textContent = (state.tasks || []).filter(t => t.completed).length;
+  if (summaryGoals) summaryGoals.textContent = (state.goals || []).length;
+  if (summaryHabits) summaryHabits.textContent = (state.dailyHabits || []).length;
+  if (summaryReflections) summaryReflections.textContent = (state.reflections || []).length;
+  if (summaryBlockingRules) summaryBlockingRules.textContent = (state.blockingRules || []).length;
+}
+
+function addCommonBlockingRules() {
+  const commonSites = [
+    { domain: "youtube.com", action: "block" },
+    { domain: "twitter.com", action: "block" },
+    { domain: "x.com", action: "block" },
+    { domain: "facebook.com", action: "block" },
+    { domain: "instagram.com", action: "block" },
+    { domain: "tiktok.com", action: "block" },
+    { domain: "reddit.com", action: "block" },
+    { domain: "netflix.com", action: "block" },
+  ];
+  
+  if (!state.blockingRules) state.blockingRules = [];
+  
+  const existingDomains = new Set(state.blockingRules.map(r => r.domain));
+  let added = 0;
+  
+  commonSites.forEach(site => {
+    if (!existingDomains.has(site.domain)) {
+      state.blockingRules.push({
+        id: `rule_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        domain: site.domain,
+        action: site.action,
+        redirectUrl: "",
+      });
+      added++;
+    }
+  });
+  
+  saveUserData();
+  renderBlockingRules();
+  showToast(`Added ${added} common blocking rules.`);
+}
+
+// ---------- Recurring Tasks ----------
+
+function handleRecurringTask(task) {
+  if (!task.recurrence || task.recurrence === "") return;
+  
+  // Calculate next occurrence
+  const currentDeadline = new Date(task.task_deadline);
+  let nextDeadline = new Date(currentDeadline);
+  
+  switch (task.recurrence) {
+    case "daily":
+      nextDeadline.setDate(nextDeadline.getDate() + 1);
+      break;
+    case "weekdays":
+      do {
+        nextDeadline.setDate(nextDeadline.getDate() + 1);
+      } while (nextDeadline.getDay() === 0 || nextDeadline.getDay() === 6);
+      break;
+    case "weekly":
+      nextDeadline.setDate(nextDeadline.getDate() + 7);
+      break;
+    case "biweekly":
+      nextDeadline.setDate(nextDeadline.getDate() + 14);
+      break;
+    case "monthly":
+      nextDeadline.setMonth(nextDeadline.getMonth() + 1);
+      break;
+  }
+  
+  // Create the new recurring task
+  const newTask = {
+    ...task,
+    id: `task_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    task_deadline: nextDeadline.toISOString().slice(0, 10),
+    completed: false,
+  };
+  
+  state.tasks.push(newTask);
+  saveUserData();
+  
+  showToast(`Recurring task "${task.task_name}" scheduled for ${nextDeadline.toLocaleDateString()}`);
+}
+
 function restoreFromState() {
   if (state.profile) {
     restoreProfileToForm();
@@ -4996,5 +6359,3 @@ function restoreFromState() {
   // Start periodic reflection checker (checks every hour)
   startReflectionChecker();
 }
-
-
