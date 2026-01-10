@@ -1091,6 +1091,25 @@ function $all(selector) {
   return Array.from(document.querySelectorAll(selector));
 }
 
+function getLockedDisplayName() {
+  const fromAccount = currentUser?.name;
+  if (typeof fromAccount === "string" && fromAccount.trim()) return fromAccount.trim();
+  const fromProfile = state?.profile?.user_name;
+  if (typeof fromProfile === "string" && fromProfile.trim()) return fromProfile.trim();
+  return "";
+}
+
+function syncLockedDisplayNameInput() {
+  const input = document.getElementById("user_name");
+  if (!input) return;
+  const locked = getLockedDisplayName();
+  if (locked) {
+    input.value = locked;
+  }
+  input.readOnly = true;
+  input.setAttribute("aria-readonly", "true");
+}
+
 function applyOnboardingModeUI() {
   const stepsToHide = ["2", "3"];
   stepsToHide.forEach((step) => {
@@ -1129,6 +1148,10 @@ function setStep(step) {
     $all(".wizard-step-indicator").forEach((el) => {
       el.classList.toggle("active", el.dataset.step === String(step));
     });
+
+    if (String(step) === "1") {
+      syncLockedDisplayNameInput();
+    }
   } else {
     // Hide wizard modal if no step (dashboard mode)
     wizard.classList.add("hidden");
@@ -1687,13 +1710,18 @@ async function handleLogin(identifier, password) {
   }
 }
 
-async function handleSignup(name, email, password) {
+async function handleSignup(name, username, email, password) {
   try {
     hideError("#signupError");
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({
+        name,
+        username: String(username || "").trim(),
+        email,
+        password,
+      }),
     });
 
     let data;
@@ -1910,22 +1938,37 @@ function initAuth() {
   // Login form
   $("#loginFormElement")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const email = $("#loginEmail").value.trim();
-    const password = $("#loginPassword").value;
-    await handleLogin(email, password);
+    const identifierEl = $("#loginIdentifier");
+    const passwordEl = $("#loginPassword");
+    if (!identifierEl || !passwordEl) return;
+    const identifier = identifierEl.value.trim();
+    const password = passwordEl.value;
+    await handleLogin(identifier, password);
   });
 
   // Signup form
   $("#signupFormElement")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const name = $("#signupName").value.trim();
-    const email = $("#signupEmail").value.trim();
-    const password = $("#signupPassword").value;
+    const nameEl = $("#signupName");
+    const usernameEl = $("#signupUsername");
+    const emailEl = $("#signupEmail");
+    const passwordEl = $("#signupPassword");
+    if (!nameEl || !usernameEl || !emailEl || !passwordEl) return;
+
+    const name = nameEl.value.trim();
+    const username = usernameEl.value.trim();
+    const email = emailEl.value.trim();
+    const password = passwordEl.value;
+
     if (password.length < 8) {
       showError("#signupError", "Password must be at least 8 characters");
       return;
     }
-    await handleSignup(name, email, password);
+    if (username.length < 3) {
+      showError("#signupError", "Username must be at least 3 characters");
+      return;
+    }
+    await handleSignup(name, username, email, password);
   });
 
   // Google auth buttons
@@ -3204,7 +3247,11 @@ function readProfileFromForm() {
 function restoreProfileToForm() {
   if (!state.profile) return;
   const p = state.profile;
-  $("#user_name").value = p.user_name || "";
+  const nameInput = $("#user_name");
+  if (nameInput) {
+    nameInput.value = p.user_name || "";
+  }
+  syncLockedDisplayNameInput();
   $("#user_age_group").value = normalizeAgeGroupValue(p.user_age_group);
 
   // Restore weekly schedule commitments

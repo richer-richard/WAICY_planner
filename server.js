@@ -474,14 +474,14 @@ function requireJwtSecret(res) {
 
 // --- Request validation schemas ---
 const registerSchema = z.object({
-  email: z.string().email().max(254),
+  email: z.string().trim().email().max(254),
   password: z.string().min(8).max(200),
-  name: z.string().min(1).max(100),
-  username: z.string().min(3).max(30).regex(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"),
+  name: z.string().trim().min(1).max(100),
+  username: z.string().trim().min(3).max(30).regex(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"),
 });
 
 const loginSchema = z.object({
-  identifier: z.string().min(1).max(254), // Can be username or email
+  identifier: z.string().trim().min(1).max(254), // Can be name, username, or email
   password: z.string().min(1).max(200),
 });
 
@@ -834,17 +834,21 @@ app.post("/api/auth/register", validateBody(registerSchema), async (req, res) =>
     if (!requireJwtSecret(res)) return;
 
     const { email, password, name, username } = req.body;
+    const emailKey = String(email || "").trim().toLowerCase();
+    const nameClean = String(name || "").trim();
+    const usernameClean = String(username || "").trim();
 
     const users = await getUsers();
     
     // Check if email already exists
-    if (users[email]) {
+    const existingEmailKey = Object.keys(users).find((k) => k.toLowerCase() === emailKey);
+    if (existingEmailKey) {
       return res.status(409).json({ error: "Email already registered" });
     }
     
     // Check if username already exists
     const usernameExists = Object.values(users).some(
-      (u) => u.username && u.username.toLowerCase() === username.toLowerCase()
+      (u) => u.username && u.username.toLowerCase() === usernameClean.toLowerCase()
     );
     if (usernameExists) {
       return res.status(409).json({ error: "Username already taken" });
@@ -853,12 +857,12 @@ app.post("/api/auth/register", validateBody(registerSchema), async (req, res) =>
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    users[email] = {
+    users[emailKey] = {
       id: userId,
-      email,
-      username,
+      email: emailKey,
+      username: usernameClean,
       password: hashedPassword,
-      name,
+      name: nameClean,
       createdAt: new Date().toISOString(),
     };
 
@@ -876,8 +880,8 @@ app.post("/api/auth/register", validateBody(registerSchema), async (req, res) =>
       blockingRules: [],
     });
 
-    const token = jwt.sign({ userId, email, username }, JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, user: { id: userId, email, username, name } });
+    const token = jwt.sign({ userId, email: emailKey, username: usernameClean }, JWT_SECRET, { expiresIn: "30d" });
+    res.json({ token, user: { id: userId, email: emailKey, username: usernameClean, name: nameClean } });
   } catch (err) {
     console.error("Registration error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -889,29 +893,65 @@ app.post("/api/auth/login", validateBody(loginSchema), async (req, res) => {
     if (!requireJwtSecret(res)) return;
 
     const { identifier, password } = req.body;
+    const identifierRaw = String(identifier || "").trim();
+    const identifierLower = identifierRaw.toLowerCase();
 
     const users = await getUsers();
     
-    // Find user by email or username
+    // Find user by email, username, or display name
     let user = null;
     let userEmail = null;
     
     // First try direct email lookup
-    if (users[identifier]) {
-      user = users[identifier];
-      userEmail = identifier;
+    if (users[identifierRaw]) {
+      user = users[identifierRaw];
+      userEmail = identifierRaw;
+    } else if (users[identifierLower]) {
+      user = users[identifierLower];
+      userEmail = identifierLower;
     } else {
-      // Search by username (case-insensitive)
+      // Search by email key (case-insensitive)
       for (const [email, u] of Object.entries(users)) {
-        if (u.username && u.username.toLowerCase() === identifier.toLowerCase()) {
+        if (email.toLowerCase() === identifierLower) {
           user = u;
           userEmail = email;
           break;
         }
       }
     }
+
+    // Search by username (case-insensitive)
+    if (!user) {
+      for (const [email, u] of Object.entries(users)) {
+        if (u.username && u.username.toLowerCase() === identifierLower) {
+          user = u;
+          userEmail = email;
+          break;
+        }
+      }
+    }
+
+    // Search by name (case-insensitive). Only allow if it matches exactly one account.
+    if (!user) {
+      const matches = [];
+      for (const [email, u] of Object.entries(users)) {
+        if (u.name && u.name.toLowerCase() === identifierLower) {
+          matches.push([email, u]);
+        }
+      }
+      if (matches.length === 1) {
+        userEmail = matches[0][0];
+        user = matches[0][1];
+      } else if (matches.length > 1) {
+        return res.status(400).json({ error: "Multiple accounts share that name. Please log in with email or username." });
+      }
+    }
     
     if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    if (!user.password) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
