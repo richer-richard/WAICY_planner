@@ -31,4 +31,5 @@ __pycache__/
 *.pyo
 
 # Icon files (macOS)
+Icon
 Icon?
