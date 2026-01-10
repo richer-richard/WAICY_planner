@@ -946,6 +946,15 @@ function migrateProfileData() {
     delete profile.works_best;
     migrated = true;
   }
+
+  // Normalize age group to numeric ranges (legacy: Middle School/High School/etc.)
+  if (profile.user_age_group) {
+    const normalized = normalizeAgeGroupValue(profile.user_age_group);
+    if (normalized && profile.user_age_group !== normalized) {
+      profile.user_age_group = normalized;
+      migrated = true;
+    }
+  }
   
   // Save migrated data back to state
   if (migrated) {
@@ -3086,6 +3095,48 @@ function readGoalsFromOnboardingForm() {
   // The goals are saved when saveUserData() is called
 }
 
+const AXIS_AGE_GROUP_OPTIONS = [
+  "1-10",
+  "11-20",
+  "21-30",
+  "31-40",
+  "41-50",
+  "51-60",
+  "61-70",
+  "71-80",
+  "81-90",
+  "91-100",
+  "101+",
+];
+
+function axisAgeToRange(age) {
+  if (!Number.isFinite(age) || age <= 0) return "";
+  if (age >= 101) return "101+";
+  const start = Math.floor((age - 1) / 10) * 10 + 1;
+  const end = start + 9;
+  return `${start}-${end}`;
+}
+
+function normalizeAgeGroupValue(value) {
+  if (value === null || value === undefined) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  if (AXIS_AGE_GROUP_OPTIONS.includes(raw)) return raw;
+
+  const parsedNumber = Number.parseInt(raw, 10);
+  if (Number.isFinite(parsedNumber) && String(parsedNumber) === raw) {
+    return axisAgeToRange(parsedNumber);
+  }
+
+  const legacyMap = {
+    "Middle School": "11-20",
+    "High School": "11-20",
+    College: "21-30",
+    Other: "31-40",
+  };
+  return legacyMap[raw] || "";
+}
+
 function readProfileFromForm() {
   const user_name = $("#user_name").value.trim();
   const user_age_group = $("#user_age_group").value;
@@ -3154,7 +3205,7 @@ function restoreProfileToForm() {
   if (!state.profile) return;
   const p = state.profile;
   $("#user_name").value = p.user_name || "";
-  $("#user_age_group").value = p.user_age_group || "";
+  $("#user_age_group").value = normalizeAgeGroupValue(p.user_age_group);
 
   // Restore weekly schedule commitments
   ["Mon", "Tue", "Wed", "Thu", "Fri"].forEach((day) => {
@@ -8126,7 +8177,43 @@ function initChatbot() {
 async function generateChatReply(text) {
   const name = state.profile?.user_name || "friend";
 
-  // Try backend /api/chat first
+  const token = getAuthToken();
+
+  // Prefer the authenticated agent endpoint when available (can read/update your data).
+  if (token && !token.startsWith("guest_")) {
+    try {
+      const res = await fetch("/api/assistant/agent", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ message: text }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        const errorMsg = errorData.error || `API error: ${res.status}`;
+        throw new Error(errorMsg);
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (data && typeof data.data === "object" && data.data) {
+        state = data.data;
+        try {
+          restoreFromState();
+        } catch {}
+        try {
+          await axisCacheStateSnapshot();
+        } catch {}
+      }
+      if (data && typeof data.reply === "string") {
+        return data.reply;
+      }
+      throw new Error("No reply field in assistant response");
+    } catch (err) {
+      console.warn("Assistant agent API failed; falling back to chat API:", err);
+    }
+  }
+
+  // Fallback: basic chat endpoint (no access to your planner data)
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
@@ -8146,7 +8233,7 @@ async function generateChatReply(text) {
       
       // Show user-friendly error message for common issues
       if (res.status === 401 || res.status === 500) {
-        return `⚠️ API Configuration Issue: ${errorMsg}. Please check your DeepSeek API key in the .env file and restart the server. For now, I'll use a basic response: ${fallbackRuleBasedReply(text)}`;
+        return `⚠️ API Configuration Issue: ${errorMsg}. Please check your AI provider keys in the .env file and restart the server. For now, I'll use a basic response: ${fallbackRuleBasedReply(text)}`;
       }
       
       throw new Error(errorMsg);

@@ -1276,14 +1276,30 @@ body {
   flex: 1;
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 2fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 20px;
   padding: 18px 22px 26px;
+  min-height: 0;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+}
+
+.main-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.sidebar .panel,
+.main-column .panel,
+.main-column .calendar-section {
+  min-height: 0;
 }
 
 
@@ -1367,22 +1383,31 @@ body {
 }
 
 .panel-tasks {
+  flex: 1 1 0;
   min-height: 280px;
 }
 
 .panel-habits {
-  min-height: 200px;
+  flex: 1 1 0;
+  min-height: 220px;
 }
 
 .habits-content {
   padding: 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .habits-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 400px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
 }
 
@@ -1531,7 +1556,9 @@ body {
   position: relative;
   z-index: 1;
   margin-top: 4px;
-  max-height: 280px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   padding-right: 2px;
 }
@@ -1756,6 +1783,12 @@ body {
   max-height: 380px;
 }
 
+.panel-chat.panel-chat-main {
+  max-height: none;
+  flex: 1 1 0;
+  min-height: 360px;
+}
+
 .chat-window {
   position: relative;
   z-index: 1;
@@ -1765,6 +1798,11 @@ body {
   max-height: 240px;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.panel-chat.panel-chat-main .chat-window {
+  min-height: 0;
+  max-height: none;
 }
 
 .chat-message {
@@ -5014,17 +5052,26 @@ textarea {
   /* Skip to main content link */
   .skip-link {
     position: absolute;
-    top: -40px;
-    left: 0;
+    top: 12px;
+    left: 12px;
     background: var(--accent-green);
-    color: white;
-    padding: 8px 16px;
+    border: 1px solid var(--accent-green-dark);
+    color: #ffffff;
+    padding: 10px 14px;
+    border-radius: 12px;
     text-decoration: none;
     z-index: 10000;
+    transform: translateY(-220%);
+    opacity: 0;
+    transition:
+      transform var(--transition-fast),
+      opacity var(--transition-fast);
   }
   
-  .skip-link:focus {
-    top: 0;
+  .skip-link:focus,
+  .skip-link:focus-visible {
+    transform: translateY(0);
+    opacity: 1;
   }
 
 .productivity-score {
