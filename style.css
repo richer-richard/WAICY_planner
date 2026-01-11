@@ -450,8 +450,7 @@ body {
 /* Dashboard */
 .dashboard {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  display: block;
 }
 
 .dashboard.hidden {
@@ -1343,36 +1342,36 @@ body {
 }
 
 .app-main {
-  flex: 1;
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 2fr);
-  grid-template-rows: minmax(0, 1fr);
-  gap: 20px;
-  padding: 18px 22px 26px;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 2fr);
+  gap: 24px;
+  padding: 22px 28px 32px;
+  align-items: start;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  min-height: 0;
+  gap: 18px;
 }
 
 .main-column {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  min-height: 0;
 }
 
-.sidebar .panel,
-.main-column .panel,
-.main-column .calendar-section {
-  min-height: 0;
+.dashboard .panel {
+  padding: 18px 18px 16px;
+}
+
+.dashboard .panel-header h2 {
+  font-size: 1.12rem;
+  font-weight: 600;
+}
+
+.dashboard .panel-subtitle {
+  font-size: 0.82rem;
 }
 
 
@@ -1463,6 +1462,11 @@ body {
 .panel-habits {
   flex: 1 1 0;
   min-height: 220px;
+}
+
+.sidebar .panel-tasks,
+.sidebar .panel-habits {
+  flex: 0 0 auto;
 }
 
 .habits-content {
