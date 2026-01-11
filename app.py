@@ -39,6 +39,20 @@ def wait_for_port(host: str, port: int, timeout_s: float) -> bool:
     return False
 
 
+def is_port_open(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+
+def find_free_port(host: str) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
 def terminate_process(proc: subprocess.Popen, name: str, timeout_s: float = 6.0) -> None:
     if proc.poll() is not None:
         return
@@ -71,7 +85,16 @@ def main() -> int:
     env = os.environ.copy()
     env.update(load_dotenv(repo_root / ".env"))
 
-    port = int(env.get("PORT", "3000"))
+    requested_port = int(env.get("PORT", "3000"))
+    port = requested_port
+    if is_port_open(args.host, port):
+        port = find_free_port(args.host)
+        env["PORT"] = str(port)
+        print(
+            f"Port {requested_port} is already in use; starting Axis on port {port} instead.",
+            file=sys.stderr,
+        )
+
     url = f"http://localhost:{port}/index.html"
 
     web_proc = subprocess.Popen(

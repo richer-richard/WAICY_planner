@@ -1,7 +1,7 @@
 /* global self */
 
-const STATIC_CACHE = "axis-static-v3";
-const RUNTIME_CACHE = "axis-runtime-v3";
+const STATIC_CACHE = "axis-static-v4";
+const RUNTIME_CACHE = "axis-runtime-v4";
 const DB_NAME = "axis_pwa";
 const DB_VERSION = 1;
 
@@ -154,7 +154,38 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for static assets.
+  const isHotAsset =
+    req.destination === "style" ||
+    req.destination === "script" ||
+    req.destination === "worker" ||
+    url.pathname.endsWith(".css") ||
+    url.pathname.endsWith(".js") ||
+    url.pathname.endsWith(".mjs") ||
+    url.pathname.endsWith(".html") ||
+    url.pathname.endsWith(".json");
+
+  // Hot assets (HTML/CSS/JS/etc): network-first to avoid stale UI after deployments.
+  if (req.method === "GET" && !url.pathname.startsWith("/api/") && isHotAsset) {
+    event.respondWith(
+      (async () => {
+        try {
+          const res = await fetch(req);
+          if (res && res.ok) {
+            const cache = await caches.open(STATIC_CACHE);
+            cache.put(req, res.clone());
+          }
+          return res;
+        } catch {
+          const cached = await caches.match(req);
+          if (cached) return cached;
+          throw new Error("Network error and no cached asset available");
+        }
+      })(),
+    );
+    return;
+  }
+
+  // Other static assets: cache-first.
   if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
     event.respondWith(
       (async () => {

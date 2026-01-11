@@ -3177,7 +3177,7 @@ textarea {
 }
 
 .hero-floating-card-1 {
-  top: 10%;
+  top: 18%;
   left: -5%;
   animation-delay: 0s;
 }
@@ -3494,6 +3494,16 @@ textarea {
   margin-bottom: 1.5rem;
 }
 
+.features-section .feature-icon-wrap {
+  background: transparent;
+  border: none;
+}
+
+.feature-icon-wrap .feature-icon {
+  font-size: inherit;
+  margin: 0;
+}
+
 .feature-card h3 {
   font-size: 1.25rem;
   font-weight: 600;
@@ -3530,10 +3540,10 @@ textarea {
 }
 
 .how-it-works-section {
-  background: rgba(255, 255, 255, 0.08);
-  border-top: 1px solid rgba(255, 255, 255, 0.18);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.96);
+  background: var(--bg);
+  border-top: 1px solid var(--crystal-border);
+  border-bottom: 1px solid var(--crystal-border);
+  color: var(--text-main);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
