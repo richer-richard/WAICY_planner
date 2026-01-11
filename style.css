@@ -1307,10 +1307,16 @@ body {
 
 .logo-text {
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
   font-size: 1.15rem;
   color: var(--text-main);
   font-family: var(--font-sans);
+}
+
+.app-header .logo-text {
+  text-shadow:
+    0.35px 0 0 currentColor,
+    -0.35px 0 0 currentColor;
 }
 
 .logo-text-link {
@@ -1344,6 +1350,9 @@ body {
   gap: 20px;
   padding: 18px 22px 26px;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 .sidebar {
