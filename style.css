@@ -3779,7 +3779,7 @@ textarea {
 }
 
 .testimonial-content::before {
-  content: """;
+  content: "\201C";
   font-size: 2rem;
   color: var(--accent-green);
   line-height: 1;

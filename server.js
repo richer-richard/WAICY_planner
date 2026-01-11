@@ -2441,7 +2441,20 @@ Estimates: ${JSON.stringify(estimates).slice(0, 2000)}
 });
 
 // Serve the existing static front-end (index.html, script.js, style.css, etc.)
-app.use(express.static(path.join(__dirname)));
+// Disable caching for development to ensure latest files are always served
+app.use(express.static(path.join(__dirname), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res, filePath) => {
+    // Disable caching for HTML, CSS, and JS files
+    if (filePath.endsWith('.html') || filePath.endsWith('.css') || filePath.endsWith('.js')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+    }
+  }
+}));
 
 app.post("/api/chat", async (req, res) => {
   try {
